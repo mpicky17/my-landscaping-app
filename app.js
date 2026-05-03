@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v6';
+const APP_VERSION = 'my-landscaping-v7';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -845,7 +845,10 @@ function renderPhotoThumbMap(photo) {
   if (photo.tileUrl) {
     console.log(`[thumb] ${photo.id} tileUrl=${photo.tileUrl} zoom=${Math.min(17, photo.maxNativeZoom || 17)} maxNativeZoom=${photo.maxNativeZoom || 19}`);
     const tl = L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: photo.maxNativeZoom || 19 });
-    tl.on('tileerror', e => console.error(`[thumb] tile error for ${photo.id}:`, e.coords, e.error || e));
+    tl.on('tileerror', e => {
+      const url = tl.getTileUrl(e.coords);
+      console.error(`[thumb] TILE FAILED — open this URL in a new tab to see the error:\n${url}`);
+    });
     tl.on('tileload', () => console.log(`[thumb] tile loaded OK for ${photo.id}`));
     tl.addTo(m);
   }
