@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v10';
+const APP_VERSION = 'my-landscaping-v11';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -14,6 +14,7 @@ let state = {
   photos: {},       // [id]: photo object
   polygons: {},     // [id]: GeoJSON feature object
   activeView: 'single',
+  mainViewPhoto: null,
   multiViewPhotos: [null, null, null, null],
   settings: {
     googleMapsKey: '',
@@ -878,6 +879,13 @@ function updateMultiPaneSelects() {
     sel.innerHTML = '<option value="">Select photo…</option>' +
       kept.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${escHtml(p.label || p.year)}</option>`).join('');
   }
+
+  const mainSel = document.getElementById('main-photo-select');
+  if (mainSel) {
+    const cur = mainSel.value;
+    mainSel.innerHTML = '<option value="">Select photo…</option>' +
+      kept.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${escHtml(p.label || p.year)}</option>`).join('');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1321,6 +1329,9 @@ function wireEvents() {
     const firstKept = Object.values(state.photos).find(p => p.status === 'keep');
     if (firstKept && firstKept.tileUrl) {
       setMainTileLayer(firstKept.tileUrl);
+      state.mainViewPhoto = firstKept.id;
+      document.getElementById('main-photo-select').value = firstKept.id;
+      saveState();
     }
     document.getElementById('welcome-overlay').classList.add('hidden');
     showToast('Photo review complete');
@@ -1346,6 +1357,19 @@ function wireEvents() {
     saveState();
     renderPhotoLibrary();
     showToast('Google satellite added');
+  });
+
+  // Single-view photo selector
+  document.getElementById('main-photo-select').addEventListener('change', e => {
+    const photoId = e.target.value;
+    state.mainViewPhoto = photoId || null;
+    saveState();
+    const photo = state.photos[photoId];
+    if (photo && photo.tileUrl) {
+      setMainTileLayer(photo.tileUrl);
+    } else if (!photoId) {
+      setMainTileLayer(ESRI_IMAGERY);
+    }
   });
 
   // Multi-view pane selects
@@ -1404,6 +1428,12 @@ async function boot() {
   // Restore photo library
   renderPhotoLibrary();
   updateMultiPaneSelects();
+
+  // Restore single-view selected photo
+  if (state.mainViewPhoto && state.photos[state.mainViewPhoto]) {
+    document.getElementById('main-photo-select').value = state.mainViewPhoto;
+    setMainTileLayer(state.photos[state.mainViewPhoto].tileUrl);
+  }
 
   // Show welcome overlay only if no address has been set
   if (state.address) {
