@@ -107,6 +107,8 @@ let multiTileLayers = [null, null, null, null];
 let drawControl = null;
 let polygonFeatureGroup = null;   // shared across all maps
 let multiPolyGroups = [];         // references added to each multi map
+let previewMap = null;
+let previewPhotoId = null;
 
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const ESRI_IMAGERY_ATTR = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
@@ -888,6 +890,12 @@ function renderPhotoLibrary() {
     }
   });
 
+  // Thumbnail click → full-size preview
+  grid.querySelectorAll('.photo-thumb').forEach(el => {
+    el.style.cursor = 'zoom-in';
+    el.addEventListener('click', () => showPhotoPreview(el.closest('.photo-card').dataset.id));
+  });
+
   // Event listeners
   grid.querySelectorAll('.photo-label-input').forEach(inp => {
     inp.addEventListener('input', e => {
@@ -1148,6 +1156,49 @@ function saveSettings() {
 // Label modal
 // ─────────────────────────────────────────────────────────────────────────────
 
+function showPhotoPreview(photoId) {
+  const photo = state.photos[photoId];
+  if (!photo) return;
+  previewPhotoId = photoId;
+
+  document.getElementById('preview-title').textContent = photo.label || photo.source;
+  document.getElementById('preview-subtitle').textContent =
+    [photo.source, photo.year].filter(Boolean).join(' · ');
+  document.getElementById('preview-keep-btn').classList.toggle('active', photo.status === 'keep');
+  document.getElementById('preview-ignore-btn').classList.toggle('active', photo.status === 'ignore');
+
+  document.getElementById('photo-preview-modal').classList.add('open');
+
+  if (previewMap) { previewMap.remove(); previewMap = null; }
+
+  requestAnimationFrame(() => {
+    previewMap = L.map('preview-map', {
+      center: [state.center.lat, state.center.lng],
+      zoom: 18,
+      zoomControl: true,
+      attributionControl: false,
+    });
+
+    if (photo.source === 'upload') {
+      L.tileLayer(ESRI_IMAGERY, { maxZoom: 22, maxNativeZoom: 19 }).addTo(previewMap);
+      loadImage(photoId).then(blob => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const bounds = photo.bounds || previewMap.getBounds();
+        L.imageOverlay(url, bounds, { opacity: 0.85 }).addTo(previewMap);
+      });
+    } else if (photo.tileUrl) {
+      L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: 19 }).addTo(previewMap);
+    }
+  });
+}
+
+function closePhotoPreview() {
+  document.getElementById('photo-preview-modal').classList.remove('open');
+  previewPhotoId = null;
+  if (previewMap) { previewMap.remove(); previewMap = null; }
+}
+
 function showLabelModal() {
   document.getElementById('label-modal').classList.add('open');
   document.getElementById('label-custom-input').value = '';
@@ -1261,6 +1312,28 @@ function wireEvents() {
   });
   document.getElementById('panel-close-btn').addEventListener('click', () => {
     polyPanel.classList.remove('open');
+  });
+
+  // Photo preview modal
+  document.getElementById('preview-modal-close').addEventListener('click', closePhotoPreview);
+  document.getElementById('photo-preview-modal').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closePhotoPreview();
+  });
+  document.getElementById('preview-keep-btn').addEventListener('click', () => {
+    if (!previewPhotoId) return;
+    state.photos[previewPhotoId].status = 'keep';
+    saveState();
+    updateMultiPaneSelects();
+    renderPhotoLibrary();
+    closePhotoPreview();
+  });
+  document.getElementById('preview-ignore-btn').addEventListener('click', () => {
+    if (!previewPhotoId) return;
+    state.photos[previewPhotoId].status = 'ignore';
+    saveState();
+    updateMultiPaneSelects();
+    renderPhotoLibrary();
+    closePhotoPreview();
   });
 
   // Label modal
