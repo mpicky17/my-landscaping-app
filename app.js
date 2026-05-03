@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v7';
+const APP_VERSION = 'my-landscaping-v8';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -709,11 +709,11 @@ async function discoverNAIP() {
   state.photos['naip_usgs'] = {
     id: 'naip_usgs',
     source: 'naip',
-    label: 'NAIP (USGS Latest)',
+    label: 'USGS Imagery (Latest)',
     year: 'Latest',
-    status: state.photos['naip_usgs']?.status || 'unreviewed', // preserve keep/ignore
-    tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/MapServer/tile/{z}/{y}/{x}',
-    maxNativeZoom: 16,
+    status: state.photos['naip_usgs']?.status || 'unreviewed',
+    tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    maxNativeZoom: 19,
   };
 
   // Always ensure we have the Esri current as a baseline
