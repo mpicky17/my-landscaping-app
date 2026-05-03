@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v11';
+const APP_VERSION = 'my-landscaping-v12';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
