@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v4';
+const APP_VERSION = 'my-landscaping-v5';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -652,6 +652,7 @@ async function discoverEsriWayback() {
     const releases = Object.entries(catalog)
       .map(([id, meta]) => ({
         releaseId: Number(id),
+        storageUrl: meta.storageUrl || null,
         date: meta.releaseDatetime || '',
         label: meta.releaseDatetime
           ? `Esri Wayback ${meta.releaseDatetime.slice(0, 10)}`
@@ -664,6 +665,11 @@ async function discoverEsriWayback() {
     releases.forEach(v => {
       const id = `wb_${v.releaseId}`;
       if (!state.photos[id]) {
+        // Use storageUrl from config (correct path order) if present, converting
+        // Esri's {level}/{row}/{col} template to Leaflet's {z}/{y}/{x}
+        const storageUrl = v.storageUrl
+          ? v.storageUrl.replace('{level}', '{z}').replace('{row}', '{y}').replace('{col}', '{x}')
+          : `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/${v.releaseId}/{z}/{y}/{x}`;
         state.photos[id] = {
           id,
           source: 'esri-wayback',
@@ -671,8 +677,8 @@ async function discoverEsriWayback() {
           year: v.year,
           releaseId: v.releaseId,
           status: 'unreviewed',
-          // Release ID goes IN the path, not as a query param
-          tileUrl: `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${v.releaseId}/{z}/{y}/{x}`,
+          tileUrl: storageUrl,
+          maxNativeZoom: 19,
         };
       }
     });
@@ -708,6 +714,7 @@ async function discoverNAIP() {
       year: 'Latest',
       status: 'unreviewed',
       tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/MapServer/tile/{z}/{y}/{x}',
+      maxNativeZoom: 16, // USGS NAIP Plus only has native tiles up to zoom 16
     };
   }
 
@@ -826,7 +833,7 @@ function renderPhotoThumbMap(photo) {
 
   const m = L.map(miniMap, {
     center: [state.center.lat, state.center.lng],
-    zoom: 17,
+    zoom: Math.min(17, photo.maxNativeZoom || 17),
     zoomControl: false,
     attributionControl: false,
     dragging: false,
@@ -838,7 +845,7 @@ function renderPhotoThumbMap(photo) {
   });
 
   if (photo.tileUrl) {
-    L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: 19 }).addTo(m);
+    L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: photo.maxNativeZoom || 19 }).addTo(m);
   }
 }
 
@@ -1054,9 +1061,10 @@ function showPhotoPreview(photoId) {
   if (previewMap) { previewMap.remove(); previewMap = null; }
 
   requestAnimationFrame(() => {
+    const nativeZoom = photo.maxNativeZoom || 19;
     previewMap = L.map('preview-map', {
       center: [state.center.lat, state.center.lng],
-      zoom: 18,
+      zoom: Math.min(18, nativeZoom),
       zoomControl: true,
       attributionControl: false,
     });
@@ -1070,7 +1078,7 @@ function showPhotoPreview(photoId) {
         L.imageOverlay(url, bounds, { opacity: 0.85 }).addTo(previewMap);
       });
     } else if (photo.tileUrl) {
-      L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: 19 }).addTo(previewMap);
+      L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: nativeZoom }).addTo(previewMap);
     }
   });
 }
@@ -1228,8 +1236,8 @@ function wireEvents() {
     btn.addEventListener('click', () => {
       const label = btn.dataset.label;
       const color = btn.dataset.color;
+      addPolygonWithLabel(label, color); // must run before closeLabelModal (which nulls pendingLayer)
       closeLabelModal();
-      addPolygonWithLabel(label, color);
     });
   });
 
@@ -1238,8 +1246,8 @@ function wireEvents() {
     if (!label) { showToast('Enter a label name'); return; }
     const hexColor = document.getElementById('label-color-input').value;
     const color = hexToRgba(hexColor, 0.4);
+    addPolygonWithLabel(label, color); // must run before closeLabelModal (which nulls pendingLayer)
     closeLabelModal();
-    addPolygonWithLabel(label, color);
   });
 
   document.getElementById('label-custom-input').addEventListener('keydown', e => {
