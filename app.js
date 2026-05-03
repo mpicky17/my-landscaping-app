@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v5';
+const APP_VERSION = 'my-landscaping-v6';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -705,18 +705,16 @@ function addEsriCurrentPhoto() {
 async function discoverNAIP() {
   // USGS National Map NAIP Plus — free public tile service, no auth required.
   // naip.arcgis.com requires an Esri subscription and returns blank tiles without one.
-  const id = 'naip_usgs';
-  if (!state.photos[id]) {
-    state.photos[id] = {
-      id,
-      source: 'naip',
-      label: 'NAIP (USGS Latest)',
-      year: 'Latest',
-      status: 'unreviewed',
-      tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/MapServer/tile/{z}/{y}/{x}',
-      maxNativeZoom: 16, // USGS NAIP Plus only has native tiles up to zoom 16
-    };
-  }
+  // Always overwrite so fixes to tileUrl/maxNativeZoom take effect without clearing data
+  state.photos['naip_usgs'] = {
+    id: 'naip_usgs',
+    source: 'naip',
+    label: 'NAIP (USGS Latest)',
+    year: 'Latest',
+    status: state.photos['naip_usgs']?.status || 'unreviewed', // preserve keep/ignore
+    tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/MapServer/tile/{z}/{y}/{x}',
+    maxNativeZoom: 16,
+  };
 
   // Always ensure we have the Esri current as a baseline
   addEsriCurrentPhoto();
@@ -845,7 +843,11 @@ function renderPhotoThumbMap(photo) {
   });
 
   if (photo.tileUrl) {
-    L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: photo.maxNativeZoom || 19 }).addTo(m);
+    console.log(`[thumb] ${photo.id} tileUrl=${photo.tileUrl} zoom=${Math.min(17, photo.maxNativeZoom || 17)} maxNativeZoom=${photo.maxNativeZoom || 19}`);
+    const tl = L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: photo.maxNativeZoom || 19 });
+    tl.on('tileerror', e => console.error(`[thumb] tile error for ${photo.id}:`, e.coords, e.error || e));
+    tl.on('tileload', () => console.log(`[thumb] tile loaded OK for ${photo.id}`));
+    tl.addTo(m);
   }
 }
 
