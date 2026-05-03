@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v9';
+const APP_VERSION = 'my-landscaping-v10';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -1045,6 +1045,7 @@ function openSettings() {
 }
 
 function closeSettings() {
+  saveSettings();
   document.getElementById('settings-modal').classList.remove('open');
 }
 
