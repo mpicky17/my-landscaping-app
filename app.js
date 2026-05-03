@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v2';
+const APP_VERSION = 'my-landscaping-v3';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -640,103 +640,46 @@ async function discoverImagery() {
 }
 
 async function discoverEsriWayback() {
-  // Fetch available Wayback versions
+  // Fetch the official Wayback release catalog (public S3 JSON, no auth required)
   try {
-    const { lat, lng } = state.center;
-    const versionsUrl = 'https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/WMTSCapabilities.xml';
-    // We'll use the JSON-based Wayback catalog instead
-    const catalogUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/World_Imagery/default/GoogleMapsCompatible/{z}/{y}/{x}`;
+    const res = await fetch(
+      'https://s3-us-west-2.amazonaws.com/config.maptiles.arcgis.com/waybackconfig.json'
+    );
+    if (!res.ok) throw new Error(`Wayback config fetch failed: ${res.status}`);
+    const catalog = await res.json();
 
-    // Get list of available release IDs from Wayback API
-    const releasesUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS?request=GetCapabilities&service=WMTS`;
+    // catalog keys are numeric release IDs; each entry has releaseDatetime
+    const releases = Object.entries(catalog)
+      .map(([id, meta]) => ({
+        releaseId: Number(id),
+        date: meta.releaseDatetime || '',
+        label: meta.releaseDatetime
+          ? `Esri Wayback ${meta.releaseDatetime.slice(0, 10)}`
+          : `Esri Wayback #${id}`,
+        year: meta.releaseDatetime ? meta.releaseDatetime.slice(0, 4) : id,
+      }))
+      .sort((a, b) => b.releaseId - a.releaseId) // newest first
+      .slice(0, 12);
 
-    // Use the Wayback Items API to find available versions for this location
-    const z = 18;
-    const { x: tileX, y: tileY } = latLngToTile(lat, lng, z);
-    const itemsUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}`;
-
-    // Fetch the Wayback releases manifest
-    const manifestUrl = 'https://wayback.maptiles.arcgis.com/arcgis/rest/info?f=json';
-    const manifestRes = await fetch(manifestUrl);
-
-    // Use Wayback select endpoint to get available items for this tile
-    const selectUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}`;
-
-    // Fetch all Wayback release dates
-    const allReleasesUrl = `https://waybackdev.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/1.0.0/WMTSCapabilities.xml`;
-
-    // Simpler approach: use the Wayback items endpoint
-    const waybackItemsUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/1.0.0/default028mm/GoogleMapsCompatible/${z}/${tileY}/${tileX}`;
-
-    // Query the Wayback releases for which versions have imagery at this tile
-    const waybackQueryUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}`;
-
-    // Use the known endpoint for fetching Wayback items
-    // This returns an array of release numbers that have changed imagery at this tile
-    const changesUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}/releases`;
-
-    const relRes = await fetch(`https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}`, { method: 'HEAD' });
-
-    // Fallback: just add the Wayback "current" and a few hardcoded popular release years
-    // as a reliable stub until a proper version catalog is implemented
-    const waybackVersions = await fetchWaybackVersions(lat, lng, z, tileX, tileY);
-
-    waybackVersions.forEach(v => {
-      if (!Object.values(state.photos).find(p => p.source === 'esri-wayback' && p.releaseId === v.releaseId)) {
-        const id = `wb_${v.releaseId}`;
+    releases.forEach(v => {
+      const id = `wb_${v.releaseId}`;
+      if (!state.photos[id]) {
         state.photos[id] = {
           id,
           source: 'esri-wayback',
-          label: v.label || `Esri Wayback ${v.year}`,
+          label: v.label,
           year: v.year,
           releaseId: v.releaseId,
           status: 'unreviewed',
-          tileUrl: `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/{z}/{y}/{x}?releaseId=${v.releaseId}`,
+          // Release ID goes IN the path, not as a query param
+          tileUrl: `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${v.releaseId}/{z}/{y}/{x}`,
         };
       }
     });
   } catch (e) {
     console.warn('Esri Wayback discovery failed:', e);
-    // Add a single fallback "current Esri" entry
     addEsriCurrentPhoto();
   }
-}
-
-async function fetchWaybackVersions(lat, lng, z, tileX, tileY) {
-  try {
-    // Fetch the Wayback items for this specific tile to find available release IDs
-    const url = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}`;
-
-    // The official Wayback API endpoint for querying changes at a location:
-    const changesUrl = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/1.0.0/default028mm/GoogleMapsCompatible/${z}/${tileY}/${tileX}/releases`;
-
-    const res = await fetch(`https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/WMTS/tile/1.0.0/default028mm/${z}/${tileY}/${tileX}/releases`);
-
-    if (res.ok) {
-      const data = await res.json();
-      // data is an array of release IDs
-      if (Array.isArray(data)) {
-        return data.slice(0, 8).map(releaseId => ({
-          releaseId,
-          year: estimateYearFromRelease(releaseId),
-          label: `Esri Wayback (${estimateYearFromRelease(releaseId)})`,
-        }));
-      }
-    }
-  } catch (e) {
-    console.warn('Wayback releases fetch failed:', e);
-  }
-
-  // Fallback: current Esri + several prior release stubs
-  return [
-    { releaseId: 0, year: 'Current', label: 'Esri World Imagery (Current)' },
-  ];
-}
-
-function estimateYearFromRelease(releaseId) {
-  // Wayback release IDs are roughly chronological; provide a best-effort label
-  // Actual dates would require fetching the full catalog
-  return `Release ${releaseId}`;
 }
 
 function addEsriCurrentPhoto() {
@@ -754,79 +697,18 @@ function addEsriCurrentPhoto() {
 }
 
 async function discoverNAIP() {
-  try {
-    const { lat, lng } = state.center;
-    const buffer = 0.001; // ~100m
-    const bbox = `${lng - buffer},${lat - buffer},${lng + buffer},${lat + buffer}`;
-
-    // Query NAIP ImageServer for available imagery dates
-    const url = `https://services.arcgisonline.com/arcgis/rest/services/Specialty/World_Physical_Map/MapServer` +
-      `?f=json`; // placeholder — actual NAIP query below
-
-    const naipUrl = `https://naip.arcgis.com/arcgis/rest/services/NAIP/ImageServer/query` +
-      `?geometry=${encodeURIComponent(bbox)}` +
-      `&geometryType=esriGeometryEnvelope` +
-      `&inSR=4326` +
-      `&outFields=SrcImgDate` +
-      `&returnGeometry=false` +
-      `&f=json`;
-
-    const res = await fetch(naipUrl);
-    if (!res.ok) throw new Error(`NAIP query failed: ${res.status}`);
-    const data = await res.json();
-
-    if (data.features && data.features.length > 0) {
-      // Extract distinct years
-      const years = new Set();
-      data.features.forEach(f => {
-        const dateStr = f.attributes && f.attributes.SrcImgDate;
-        if (dateStr) {
-          const year = new Date(dateStr).getFullYear();
-          if (!isNaN(year)) years.add(year);
-        }
-      });
-
-      [...years].sort().reverse().slice(0, 6).forEach(year => {
-        const id = `naip_${year}`;
-        if (!state.photos[id]) {
-          state.photos[id] = {
-            id,
-            source: 'naip',
-            label: `NAIP ${year}`,
-            year: String(year),
-            status: 'unreviewed',
-            tileUrl: `https://naip.arcgis.com/arcgis/rest/services/NAIP/${year}/ImageServer/tile/{z}/{y}/{x}`,
-          };
-        }
-      });
-    } else {
-      // NAIP may not have coverage; add a general reference layer
-      const id = 'naip_current';
-      if (!state.photos[id]) {
-        state.photos[id] = {
-          id,
-          source: 'naip',
-          label: 'NAIP (Latest Available)',
-          year: 'Latest',
-          status: 'unreviewed',
-          tileUrl: 'https://naip.arcgis.com/arcgis/rest/services/NAIP/ImageServer/tile/{z}/{y}/{x}',
-        };
-      }
-    }
-  } catch (e) {
-    console.warn('NAIP discovery failed:', e);
-    // Add fallback
-    const id = 'naip_current';
-    if (!state.photos[id]) {
-      state.photos[id] = {
-        id,
-        source: 'naip',
-        label: 'NAIP (Latest Available)',
-        year: 'Latest',
-        status: 'unreviewed',
-        tileUrl: 'https://naip.arcgis.com/arcgis/rest/services/NAIP/ImageServer/tile/{z}/{y}/{x}',
-      };
-    }
+  // USGS National Map NAIP Plus — free public tile service, no auth required.
+  // naip.arcgis.com requires an Esri subscription and returns blank tiles without one.
+  const id = 'naip_usgs';
+  if (!state.photos[id]) {
+    state.photos[id] = {
+      id,
+      source: 'naip',
+      label: 'NAIP (USGS Latest)',
+      year: 'Latest',
+      status: 'unreviewed',
+      tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/MapServer/tile/{z}/{y}/{x}',
+    };
   }
 
   // Always ensure we have the Esri current as a baseline
