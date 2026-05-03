@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>My Landscaping App</title>
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Landscaping" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <meta name="theme-color" content="#16a34a" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet.draw -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <!-- Leaflet.Sync -->
+  <script src="https://unpkg.com/leaflet.sync@0.2.4/L.Map.Sync.js"></script>
+  <!-- Firebase compat SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green: #16a34a;
+      --green-light: #dcfce7;
+      --green-dark: #15803d;
+      --bg: #f0fdf4;
+      --surface: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --text-muted: #6b7280;
+      --danger: #ef4444;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --surface: #1e293b;
+        --border: #334155;
+        --text: #f1f5f9;
+        --text-muted: #94a3b8;
+        --green-light: #14532d;
+        --shadow: 0 2px 8px rgba(0,0,0,0.4);
+      }
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    .app-header {
+      background: var(--green);
+      color: #fff;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      safe-area-inset-top: env(safe-area-inset-top);
+      padding-top: max(10px, env(safe-area-inset-top));
+    }
+
+    .app-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      flex: 1;
+      line-height: 1.2;
+    }
+
+    .app-version {
+      font-size: 0.65rem;
+      opacity: 0.7;
+      font-weight: 400;
+    }
+
+    .header-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 1.2rem;
+      line-height: 1;
+      touch-action: manipulation;
+      opacity: 0.85;
+    }
+
+    .header-btn:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+
+    .sync-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.4);
+      flex-shrink: 0;
+    }
+    .sync-dot.ok    { background: #bbf7d0; }
+    .sync-dot.error { background: #fca5a5; }
+    .sync-dot.syncing { background: #fef08a; animation: pulse 1s infinite; }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* ── Address bar ── */
+    .address-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .address-input {
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 1rem;
+      font-family: inherit;
+      background: var(--bg);
+      color: var(--text);
+      touch-action: manipulation;
+      min-width: 0;
+    }
+
+    .address-input:focus {
+      outline: 2px solid var(--green);
+      border-color: transparent;
+    }
+
+    .search-btn {
+      background: var(--green);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 1rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .search-btn:active { background: var(--green-dark); }
+    .search-btn:disabled { opacity: 0.5; cursor: default; }
+
+    /* ── View tabs ── */
+    .view-tabs {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-shrink: 0;
+    }
+
+    .view-tab {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 10px 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      touch-action: manipulation;
+      font-family: inherit;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .view-tab.active {
+      color: var(--green);
+      border-bottom-color: var(--green);
+    }
+
+    .view-tab:disabled { opacity: 0.4; cursor: default; }
+
+    /* ── Content area ── */
+    .content-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .view-panel {
+      display: none;
+      flex: 1;
+      overflow: hidden;
+      flex-direction: column;
+    }
+
+    .view-panel.active {
+      display: flex;
+    }
+
+    /* ── Single map view ── */
+    #map-main {
+      flex: 1;
+    }
+
+    /* ── Multi view ── */
+    .multi-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 2px;
+      background: var(--border);
+    }
+
+    @media (max-width: 600px) {
+      .multi-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: repeat(4, 50vh);
+        gap: 2px;
+      }
+    }
+
+    .multi-pane {
+      position: relative;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pane-header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 500;
+      padding: 4px 6px;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pane-select {
+      pointer-events: auto;
+      font-size: 0.75rem;
+      font-family: inherit;
+      border: none;
+      border-radius: 4px;
+      padding: 3px 6px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      cursor: pointer;
+      touch-action: manipulation;
+      max-width: calc(100% - 8px);
+    }
+
+    .pane-select option { background: #1e293b; color: #f1f5f9; }
+
+    .multi-map {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── Photo library ── */
+    .photo-library {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .photo-library-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .photo-library-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .photo-library-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.875rem;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: opacity 0.15s;
+    }
+
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .btn:active:not(:disabled) { opacity: 0.75; }
+
+    .btn-primary   { background: var(--green); color: #fff; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn-danger    { background: var(--danger); color: #fff; }
+
+    .upload-btn-wrap {
+      position: relative;
+      display: inline-block;
+    }
+
+    .upload-btn-wrap input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .photo-loading {
+      text-align: center;
+      padding: 20px;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .photo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+    }
+
+    .photo-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      transition: border-color 0.15s;
+    }
+
+    .photo-card.kept    { border-color: var(--green); }
+    .photo-card.ignored { opacity: 0.4; }
+
+    .photo-thumb {
+      width: 100%;
+      height: 120px;
+      background: #1e3a5f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      color: #7fb3d3;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .photo-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .photo-thumb-map {
+      width: 100%;
+      height: 100%;
+    }
+
+    .photo-card-body {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .photo-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .photo-source-badge {
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--green-light);
+      color: var(--green-dark);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .photo-year {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .photo-label-input {
+      font-size: 1rem;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: var(--bg);
+      color: var(--text);
+      width: 100%;
+      touch-action: manipulation;
+    }
+
+    .photo-label-input:focus {
+      outline: 2px solid var(--green);
+      border-color: transparent;
+    }
+
+    .photo-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .photo-keep-btn, .photo-ignore-btn {
+      flex: 1;
+      border: none;
+      border-radius: 6px;
+      padding: 7px;
+      font-size: 0.875rem;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: opacity 0.15s;
+    }
+
+    .photo-keep-btn   { background: var(--green); color: #fff; }
+    .photo-ignore-btn { background: #fef2f2; color: var(--danger); }
+
+    @media (prefers-color-scheme: dark) {
+      .photo-ignore-btn { background: #450a0a; }
+    }
+
+    .photo-keep-btn.active   { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--green); }
+    .photo-ignore-btn.active { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--danger); }
+
+    .photo-review-done {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .google-imagery-prompt {
+      background: var(--green-light);
+      border: 1px solid var(--green);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.875rem;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .google-api-input {
+      flex: 1;
+      font-size: 1rem;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      background: var(--bg);
+      color: var(--text);
+      touch-action: manipulation;
+    }
+
+    /* ── Drawing toolbar ── */
+    .draw-toolbar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 10px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding-bottom: max(8px, env(safe-area-inset-bottom));
+    }
+
+    .draw-btn {
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 6px;
+      font-size: 0.75rem;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      touch-action: manipulation;
+      text-align: center;
+      transition: background 0.15s, border-color 0.15s;
+      line-height: 1.3;
+    }
+
+    .draw-btn:active:not(:disabled) { background: var(--green-light); }
+
+    .draw-btn.active {
+      background: var(--green);
+      color: #fff;
+      border-color: var(--green-dark);
+    }
+
+    .draw-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    /* ── Polygon list sidebar (collapsible) ── */
+    .polygon-panel {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 56px; /* above toolbar */
+      width: 220px;
+      z-index: 900;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.25s ease;
+      box-shadow: -4px 0 12px rgba(0,0,0,0.1);
+    }
+
+    .polygon-panel.open { transform: translateX(0); }
+
+    .polygon-panel-header {
+      padding: 10px 12px;
+      font-weight: 600;
+      font-size: 0.875rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .polygon-panel-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      color: var(--text-muted);
+      padding: 2px 4px;
+      border-radius: 4px;
+      touch-action: manipulation;
+    }
+
+    .polygon-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+    }
+
+    .polygon-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .polygon-item:hover { background: var(--green-light); }
+
+    .polygon-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      border: 1px solid rgba(0,0,0,0.15);
+    }
+
+    .polygon-item-label {
+      font-size: 0.8rem;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .polygon-item-area {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .polygon-list-empty {
+      text-align: center;
+      padding: 20px 10px;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    /* ── Modals ── */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 2000;
+      align-items: flex-end;
+      justify-content: center;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    @media (min-width: 600px) {
+      .modal-backdrop { align-items: center; }
+    }
+
+    .modal {
+      background: var(--surface);
+      border-radius: 16px 16px 0 0;
+      width: 100%;
+      max-width: 520px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.2);
+    }
+
+    @media (min-width: 600px) {
+      .modal {
+        border-radius: 16px;
+        max-height: 80vh;
+        padding: 24px;
+      }
+    }
+
+    .modal-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .modal-close {
+      float: right;
+      background: none;
+      border: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: var(--text-muted);
+      line-height: 1;
+      padding: 0 4px;
+      touch-action: manipulation;
+    }
+
+    /* ── Label picker ── */
+    .label-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .label-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.9rem;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .label-btn:hover { border-color: var(--green); background: var(--green-light); }
+
+    .label-swatch {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+
+    .label-custom-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .label-custom-input {
+      flex: 1;
+      font-size: 1rem;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: var(--bg);
+      color: var(--text);
+      touch-action: manipulation;
+    }
+
+    .label-custom-input:focus {
+      outline: 2px solid var(--green);
+      border-color: transparent;
+    }
+
+    .label-color-input {
+      width: 42px;
+      height: 42px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      padding: 2px;
+      touch-action: manipulation;
+    }
+
+    /* ── Settings dialog ── */
+    .settings-section {
+      margin-bottom: 20px;
+    }
+
+    .settings-section h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .settings-label {
+      font-size: 0.9rem;
+      flex: 1;
+      color: var(--text);
+    }
+
+    .settings-input {
+      flex: 2;
+      font-size: 1rem;
+      font-family: inherit;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: var(--bg);
+      color: var(--text);
+      touch-action: manipulation;
+      min-width: 0;
+    }
+
+    .settings-input:focus {
+      outline: 2px solid var(--green);
+      border-color: transparent;
+    }
+
+    /* Toggle switch (reused from checklist-app) */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      cursor: pointer;
+      flex-shrink: 0;
+      touch-action: manipulation;
+    }
+
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      position: absolute;
+    }
+
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: #d1d5db;
+      border-radius: 12px;
+      transition: background 0.2s;
+    }
+
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+
+    .toggle-switch input:checked + .toggle-track { background: var(--green); }
+    .toggle-switch input:checked + .toggle-track::after { transform: translateX(20px); }
+
+    /* ── Polygon info popup ── */
+    .leaflet-popup-content-wrapper {
+      border-radius: 10px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+
+    .poly-popup {
+      min-width: 160px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .poly-popup h4 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .poly-popup-meta {
+      font-size: 0.8rem;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+
+    .poly-popup textarea {
+      width: 100%;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 5px 7px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      resize: none;
+      min-height: 50px;
+      field-sizing: content;
+      touch-action: manipulation;
+    }
+
+    .poly-popup-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .poly-popup-actions button {
+      flex: 1;
+      border: none;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1e293b;
+      color: #f1f5f9;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s, transform 0.25s;
+      z-index: 3000;
+      white-space: nowrap;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ── Welcome / no-address state ── */
+    .welcome-overlay {
+      position: absolute;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .welcome-overlay.hidden { display: none; }
+
+    .welcome-icon {
+      font-size: 3rem;
+      line-height: 1;
+    }
+
+    .welcome-text {
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      max-width: 280px;
+    }
+
+    /* ── Leaflet overrides ── */
+    .leaflet-control-zoom { margin: 8px !important; }
+    .leaflet-bar { box-shadow: var(--shadow) !important; }
+    .leaflet-bar a { background: var(--surface) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="app-title">
+      My Landscaping
+      <span class="app-version" id="version-badge">v1</span>
+    </div>
+    <span class="sync-dot" id="sync-dot" title="Sync status"></span>
+    <button class="header-btn" id="layers-btn" title="Toggle polygon list">&#9776;</button>
+    <button class="header-btn" id="settings-btn" title="Settings">&#9881;</button>
+  </header>
+
+  <!-- Address bar -->
+  <div class="address-bar">
+    <input
+      type="text"
+      class="address-input"
+      id="address-input"
+      placeholder="Enter property address..."
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+      enterkeyhint="search"
+    />
+    <button class="search-btn" id="search-btn">Search</button>
+  </div>
+
+  <!-- View tabs -->
+  <nav class="view-tabs" id="view-tabs">
+    <button class="view-tab active" data-view="single">Single View</button>
+    <button class="view-tab" data-view="multi">Multi View</button>
+    <button class="view-tab" data-view="photos">Photo Library</button>
+  </nav>
+
+  <!-- Content area -->
+  <div class="content-area">
+
+    <!-- Single View Panel -->
+    <div class="view-panel active" id="panel-single">
+      <!-- Main map -->
+      <div id="map-main"></div>
+
+      <!-- Welcome overlay (shown before address search) -->
+      <div class="welcome-overlay" id="welcome-overlay">
+        <div class="welcome-icon">&#127807;</div>
+        <p class="welcome-text">Enter a property address above to load satellite imagery and start mapping.</p>
+      </div>
+
+      <!-- Drawing toolbar -->
+      <div class="draw-toolbar" id="draw-toolbar">
+        <button class="draw-btn" id="draw-polygon-btn">&#9643; Draw</button>
+        <button class="draw-btn" id="draw-edit-btn">&#9998; Edit</button>
+        <button class="draw-btn" id="draw-delete-btn">&#128465; Delete</button>
+        <button class="draw-btn" id="ai-detect-btn" disabled title="Coming soon">&#129302; AI</button>
+        <button class="draw-btn" id="toggle-panel-btn">&#9776;</button>
+      </div>
+
+      <!-- Polygon sidebar panel -->
+      <div class="polygon-panel" id="polygon-panel">
+        <div class="polygon-panel-header">
+          <span>Polygons</span>
+          <button class="polygon-panel-close" id="panel-close-btn">&#10005;</button>
+        </div>
+        <div class="polygon-list" id="polygon-list">
+          <p class="polygon-list-empty">No polygons yet.<br>Use Draw to add one.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Multi View Panel -->
+    <div class="view-panel" id="panel-multi">
+      <div class="multi-grid" id="multi-grid">
+        <div class="multi-pane" id="pane-0">
+          <div class="pane-header">
+            <select class="pane-select" id="pane-select-0" data-pane="0">
+              <option value="">Select photo…</option>
+            </select>
+          </div>
+          <div class="multi-map" id="map-multi-0"></div>
+        </div>
+        <div class="multi-pane" id="pane-1">
+          <div class="pane-header">
+            <select class="pane-select" id="pane-select-1" data-pane="1">
+              <option value="">Select photo…</option>
+            </select>
+          </div>
+          <div class="multi-map" id="map-multi-1"></div>
+        </div>
+        <div class="multi-pane" id="pane-2">
+          <div class="pane-header">
+            <select class="pane-select" id="pane-select-2" data-pane="2">
+              <option value="">Select photo…</option>
+            </select>
+          </div>
+          <div class="multi-map" id="map-multi-2"></div>
+        </div>
+        <div class="multi-pane" id="pane-3">
+          <div class="pane-header">
+            <select class="pane-select" id="pane-select-3" data-pane="3">
+              <option value="">Select photo…</option>
+            </select>
+          </div>
+          <div class="multi-map" id="map-multi-3"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Photo Library Panel -->
+    <div class="view-panel" id="panel-photos">
+      <div class="photo-library" id="photo-library">
+
+        <div class="photo-library-header">
+          <h2>Photo Library</h2>
+          <div class="photo-library-actions">
+            <div class="upload-btn-wrap">
+              <button class="btn btn-secondary">&#128247; Upload</button>
+              <input type="file" id="upload-input" accept="image/*" multiple />
+            </div>
+            <button class="btn btn-primary" id="discover-btn">&#128269; Discover</button>
+          </div>
+        </div>
+
+        <div class="photo-loading" id="photo-loading" style="display:none">
+          Searching for imagery for this location…
+        </div>
+
+        <div class="photo-grid" id="photo-grid">
+          <!-- Photo cards injected here -->
+        </div>
+
+        <div class="photo-review-done" id="photo-review-done" style="display:none">
+          <div class="google-imagery-prompt" id="google-prompt" style="display:none">
+            <span style="flex:1">Search Google Maps imagery?</span>
+            <input type="text" class="google-api-input" id="google-api-input" placeholder="Google API key…" />
+            <button class="btn btn-primary" id="google-fetch-btn">Fetch</button>
+          </div>
+          <button class="btn btn-primary" id="done-reviewing-btn">Done Reviewing &#10003;</button>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- .content-area -->
+
+  <!-- ── Label Picker Modal ── -->
+  <div class="modal-backdrop" id="label-modal">
+    <div class="modal">
+      <button class="modal-close" id="label-modal-close">&#10005;</button>
+      <div class="modal-title">Label this area</div>
+
+      <div class="label-grid" id="label-grid">
+        <button class="label-btn" data-label="Lawn"     data-color="rgba(34,197,94,0.35)">
+          <span class="label-swatch" style="background:rgba(34,197,94,0.35);border:2px solid rgba(34,197,94,0.8)"></span> Lawn
+        </button>
+        <button class="label-btn" data-label="Mulch"    data-color="rgba(180,83,9,0.35)">
+          <span class="label-swatch" style="background:rgba(180,83,9,0.35);border:2px solid rgba(180,83,9,0.8)"></span> Mulch
+        </button>
+        <button class="label-btn" data-label="Tree"     data-color="rgba(21,128,61,0.45)">
+          <span class="label-swatch" style="background:rgba(21,128,61,0.45);border:2px solid rgba(21,128,61,0.8)"></span> Tree
+        </button>
+        <button class="label-btn" data-label="Bush"     data-color="rgba(74,222,128,0.35)">
+          <span class="label-swatch" style="background:rgba(74,222,128,0.35);border:2px solid rgba(74,222,128,0.8)"></span> Bush
+        </button>
+        <button class="label-btn" data-label="Sidewalk" data-color="rgba(156,163,175,0.4)">
+          <span class="label-swatch" style="background:rgba(156,163,175,0.4);border:2px solid rgba(156,163,175,0.8)"></span> Sidewalk
+        </button>
+        <button class="label-btn" data-label="Driveway" data-color="rgba(107,114,128,0.4)">
+          <span class="label-swatch" style="background:rgba(107,114,128,0.4);border:2px solid rgba(107,114,128,0.8)"></span> Driveway
+        </button>
+        <button class="label-btn" data-label="Deck"     data-color="rgba(217,119,6,0.35)">
+          <span class="label-swatch" style="background:rgba(217,119,6,0.35);border:2px solid rgba(217,119,6,0.8)"></span> Deck
+        </button>
+        <button class="label-btn" data-label="Walkway"  data-color="rgba(209,213,219,0.4)">
+          <span class="label-swatch" style="background:rgba(209,213,219,0.4);border:2px solid rgba(209,213,219,0.8)"></span> Walkway
+        </button>
+      </div>
+
+      <div class="label-custom-row">
+        <input type="text" class="label-custom-input" id="label-custom-input" placeholder="Custom label…" />
+        <input type="color" class="label-color-input" id="label-color-input" value="#22c55e" title="Pick color" />
+        <button class="btn btn-primary" id="label-custom-btn">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Settings Modal ── -->
+  <div class="modal-backdrop" id="settings-modal">
+    <div class="modal">
+      <button class="modal-close" id="settings-modal-close">&#10005;</button>
+      <div class="modal-title">Settings</div>
+
+      <div class="settings-section">
+        <h3>API Keys (optional)</h3>
+        <div class="settings-row">
+          <label class="settings-label" for="google-maps-key-input">Google Maps</label>
+          <input type="text" class="settings-input" id="google-maps-key-input" placeholder="AIza…" autocomplete="off" />
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="claude-key-input">Claude API</label>
+          <input type="text" class="settings-input" id="claude-key-input" placeholder="sk-ant-…" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>Firebase Sync</h3>
+        <div class="settings-row">
+          <label class="settings-label">Enable sync</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="firebase-toggle" />
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div id="firebase-config-section" style="display:none">
+          <div class="settings-row">
+            <label class="settings-label" for="firebase-config-input">Firebase config JSON</label>
+          </div>
+          <textarea
+            id="firebase-config-input"
+            class="settings-input"
+            style="width:100%;min-height:80px;resize:vertical;font-size:0.8rem"
+            placeholder='{"apiKey":"...","authDomain":"...","databaseURL":"...","projectId":"..."}'
+          ></textarea>
+          <div class="settings-row" style="margin-top:8px">
+            <button class="btn btn-primary" id="firebase-save-btn" style="flex:1">Save &amp; Connect</button>
+            <button class="btn btn-secondary" id="firebase-signout-btn" style="flex:1;display:none">Sign Out</button>
+          </div>
+          <div id="firebase-status" style="font-size:0.8rem;color:var(--text-muted);margin-top:4px"></div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>Data</h3>
+        <div class="settings-row">
+          <button class="btn btn-danger" id="clear-data-btn" style="flex:1">Clear All Local Data</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
