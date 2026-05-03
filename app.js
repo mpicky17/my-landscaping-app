@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v12';
+const APP_VERSION = 'my-landscaping-v13';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -16,6 +16,7 @@ let state = {
   activeView: 'single',
   mainViewPhoto: null,
   multiViewPhotos: [null, null, null, null],
+  alignAnchor: null,  // { photoId, lat, lng } | null
   settings: {
     googleMapsKey: '',
     claudeKey: '',
@@ -106,6 +107,8 @@ let mapMain = null;
 let mapMulti = [null, null, null, null];
 let mainTileLayer = null;
 let multiTileLayers = [null, null, null, null];
+let alignAnchorMarker = null;  // L.circleMarker — green dot on mapMain
+let alignClickMode = false;    // true while waiting for user map click
 let drawControl = null;
 let polygonFeatureGroup = null;   // shared across all maps
 let multiPolyGroups = [];         // references added to each multi map
@@ -166,6 +169,8 @@ function initMainMap() {
     state.zoom = mapMain.getZoom();
     saveState();
   });
+
+  mapMain.on('zoomend', () => { applyMainTileOffset(getCurrentMainPhoto()); });
 
   // Draw events
   mapMain.on(L.Draw.Event.CREATED, onPolygonCreated);
@@ -231,6 +236,124 @@ function setMainTileLayer(tileUrl) {
   }).addTo(mapMain);
   mainTileLayer.bringToBack();
   polygonFeatureGroup.bringToFront();
+  applyMainTileOffset(getCurrentMainPhoto());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alignment
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getPixelOffset(map, dlat, dlng) {
+  const center = map.getCenter();
+  const zoom = map.getZoom();
+  const centerPx  = map.project(center, zoom);
+  const shiftedPx = map.project(L.latLng(center.lat + dlat, center.lng + dlng), zoom);
+  return { dx: shiftedPx.x - centerPx.x, dy: shiftedPx.y - centerPx.y };
+}
+
+function applyMainTileOffset(photo) {
+  if (!mainTileLayer) return;
+  const container = mainTileLayer.getContainer();
+  if (!container) return;
+  if (!photo || !photo.offset) { container.style.transform = ''; return; }
+  const { dx, dy } = getPixelOffset(mapMain, photo.offset.dlat, photo.offset.dlng);
+  container.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+
+function getCurrentMainPhoto() {
+  return state.mainViewPhoto ? state.photos[state.mainViewPhoto] : null;
+}
+
+function placeAnchorMarker(lat, lng) {
+  if (alignAnchorMarker) { alignAnchorMarker.setLatLng([lat, lng]); return; }
+  alignAnchorMarker = L.circleMarker([lat, lng], {
+    radius: 6, color: '#16a34a', fillColor: '#16a34a',
+    fillOpacity: 0.85, weight: 2, interactive: false,
+  }).addTo(mapMain);
+}
+
+function removeAnchorMarker() {
+  if (alignAnchorMarker) { mapMain.removeLayer(alignAnchorMarker); alignAnchorMarker = null; }
+}
+
+function updateAlignResetBtn() {
+  const visible = !!state.alignAnchor || Object.values(state.photos).some(p => p.offset);
+  document.getElementById('align-reset-btn').classList.toggle('visible', visible);
+}
+
+function enterAlignClickMode() {
+  alignClickMode = true;
+  document.getElementById('align-btn').classList.add('align-active');
+  document.getElementById('map-main').classList.add('align-picking');
+  mapMain.once('click', onAlignMapClick);
+}
+
+function exitAlignClickMode() {
+  alignClickMode = false;
+  document.getElementById('align-btn').classList.remove('align-active');
+  document.getElementById('map-main').classList.remove('align-picking');
+  mapMain.off('click', onAlignMapClick);
+}
+
+function onAlignMapClick(e) {
+  exitAlignClickMode();
+  const { lat, lng } = e.latlng;
+  const photo = getCurrentMainPhoto();
+
+  if (!state.alignAnchor) {
+    state.alignAnchor = { photoId: photo ? photo.id : null, lat, lng };
+    saveState();
+    placeAnchorMarker(lat, lng);
+    updateAlignResetBtn();
+    showToast('Reference point set. Switch to another photo and click Align to align it.');
+  } else if (photo && photo.id === state.alignAnchor.photoId) {
+    state.alignAnchor.lat = lat;
+    state.alignAnchor.lng = lng;
+    saveState();
+    placeAnchorMarker(lat, lng);
+    showToast('Reference point updated.');
+  } else {
+    const dlat = state.alignAnchor.lat - lat;
+    const dlng = state.alignAnchor.lng - lng;
+    if (photo) {
+      photo.offset = { dlat, dlng };
+      saveState();
+      applyMainTileOffset(photo);
+      updateAlignResetBtn();
+      const mLat = 111320;
+      const mLng = 111320 * Math.cos(lat * Math.PI / 180);
+      const nVal = Math.round(dlat * mLat);
+      const eVal = Math.round(dlng * mLng);
+      const nStr = nVal >= 0 ? `${nVal}m N` : `${-nVal}m S`;
+      const eStr = eVal >= 0 ? `${eVal}m E` : `${-eVal}m W`;
+      showToast(`Aligned. Offset: ${nStr}, ${eStr}`);
+    }
+  }
+}
+
+function onAlignBtnClick() {
+  if (alignClickMode) { exitAlignClickMode(); showToast('Alignment cancelled.'); return; }
+  const photo = getCurrentMainPhoto();
+  if (!state.alignAnchor)
+    showToast('Click a landmark on this photo as the reference point');
+  else if (photo && photo.id === state.alignAnchor.photoId)
+    showToast('Click to update the reference point');
+  else
+    showToast('Click the same landmark on this photo to align it');
+  enterAlignClickMode();
+}
+
+function resetAllAlignments() {
+  state.alignAnchor = null;
+  Object.values(state.photos).forEach(p => { delete p.offset; });
+  saveState();
+  removeAnchorMarker();
+  if (mainTileLayer) {
+    const c = mainTileLayer.getContainer();
+    if (c) c.style.transform = '';
+  }
+  updateAlignResetBtn();
+  showToast('All alignments cleared.');
 }
 
 function setMultiPanePhoto(paneIdx, photoId) {
@@ -298,6 +421,7 @@ let editHandler = null;
 let deleteHandler = null;
 
 function setDrawMode(mode) {
+  if (alignClickMode) exitAlignClickMode();
   // Cancel any active handler
   if (editHandler) { try { editHandler.disable(); } catch(e){} editHandler = null; }
   if (deleteHandler) { try { deleteHandler.disable(); } catch(e){} deleteHandler = null; }
@@ -1361,6 +1485,7 @@ function wireEvents() {
 
   // Single-view photo selector
   document.getElementById('main-photo-select').addEventListener('change', e => {
+    if (alignClickMode) exitAlignClickMode();
     const photoId = e.target.value;
     state.mainViewPhoto = photoId || null;
     saveState();
@@ -1370,6 +1495,13 @@ function wireEvents() {
     } else if (!photoId) {
       setMainTileLayer(ESRI_IMAGERY);
     }
+  });
+
+  // Align buttons
+  document.getElementById('align-btn').addEventListener('click', onAlignBtnClick);
+  document.getElementById('align-reset-btn').addEventListener('click', () => {
+    if (!confirm('Clear all alignment offsets and the reference point?')) return;
+    resetAllAlignments();
   });
 
   // Multi-view pane selects
@@ -1434,6 +1566,10 @@ async function boot() {
     document.getElementById('main-photo-select').value = state.mainViewPhoto;
     setMainTileLayer(state.photos[state.mainViewPhoto].tileUrl);
   }
+
+  // Restore alignment anchor marker and reset button visibility
+  if (state.alignAnchor) placeAnchorMarker(state.alignAnchor.lat, state.alignAnchor.lng);
+  updateAlignResetBtn();
 
   // Show welcome overlay only if no address has been set
   if (state.address) {

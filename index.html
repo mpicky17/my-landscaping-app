@@ -464,6 +464,7 @@
 
     @media (prefers-color-scheme: dark) {
       .photo-ignore-btn { background: #450a0a; }
+      #align-btn.align-active { background: #1e1b4b; border-color: #6366f1; color: #a5b4fc; }
     }
 
     .photo-keep-btn.active   { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--green); }
@@ -547,6 +548,35 @@
       opacity: 0.4;
       cursor: default;
     }
+
+    /* ── Align button ── */
+    #align-btn.align-active {
+      background: #eef2ff;
+      border-color: #6366f1;
+      color: #4f46e5;
+      animation: align-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes align-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    #map-main.align-picking,
+    #map-main.align-picking .leaflet-grab,
+    #map-main.align-picking .leaflet-interactive {
+      cursor: crosshair !important;
+    }
+    #align-reset-btn {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--danger);
+      font-size: 0.65rem;
+      cursor: pointer;
+      padding: 2px 4px;
+      touch-action: manipulation;
+      white-space: nowrap;
+    }
+    #align-reset-btn.visible { display: inline; }
 
     /* ── Polygon list sidebar (collapsible) ── */
     .polygon-panel {
@@ -1064,6 +1094,8 @@
         <button class="draw-btn" id="draw-edit-btn">&#9998; Edit</button>
         <button class="draw-btn" id="draw-delete-btn">&#128465; Delete</button>
         <button class="draw-btn" id="ai-detect-btn" disabled title="Coming soon">&#129302; AI</button>
+        <button class="draw-btn" id="align-btn" title="Align photos by reference point">&#128205; Align</button>
+        <button id="align-reset-btn" title="Clear all alignments">&#10005;</button>
         <button class="draw-btn" id="toggle-panel-btn">&#9776;</button>
       </div>
 
