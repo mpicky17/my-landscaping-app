@@ -2,7 +2,7 @@
 // Cache-first for assets, network-first for HTML.
 // Bump CACHE_NAME (and APP_VERSION in index.html) to invalidate cache on updates.
 
-const CACHE_NAME = 'my-landscaping-v3';
+const CACHE_NAME = 'my-landscaping-v4';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -41,8 +41,8 @@ self.addEventListener('fetch', event => {
   // Skip external requests (tile servers, APIs) — let browser handle them
   if (!event.request.url.startsWith(self.location.origin)) return;
 
-  // Network-first for HTML navigation
-  if (event.request.mode === 'navigate') {
+  // Network-first for HTML navigation AND app.js (ensures version badge updates on normal refresh)
+  if (event.request.mode === 'navigate' || event.request.url.endsWith('/app.js')) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
