@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v8';
+const APP_VERSION = 'my-landscaping-v9';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -18,6 +18,7 @@ let state = {
   settings: {
     googleMapsKey: '',
     claudeKey: '',
+    usgsToken: '',
     firebaseEnabled: false,
     firebaseConfig: '',
   },
@@ -703,20 +704,28 @@ function addEsriCurrentPhoto() {
 }
 
 async function discoverNAIP() {
-  // USGS National Map NAIP Plus — free public tile service, no auth required.
-  // naip.arcgis.com requires an Esri subscription and returns blank tiles without one.
-  // Always overwrite so fixes to tileUrl/maxNativeZoom take effect without clearing data
-  state.photos['naip_usgs'] = {
-    id: 'naip_usgs',
-    source: 'naip',
-    label: 'USGS Imagery (Latest)',
-    year: 'Latest',
-    status: state.photos['naip_usgs']?.status || 'unreviewed',
-    tileUrl: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
-    maxNativeZoom: 19,
-  };
+  // Clean up stale broken NAIP entries from previous versions
+  delete state.photos['naip_current'];
 
-  // Always ensure we have the Esri current as a baseline
+  const token = state.settings.usgsToken;
+  if (token) {
+    // USDA APFO NAIP imagery — requires a free USGS EarthExplorer token
+    // Get one at: https://ers.cr.usgs.gov/register
+    const baseUrl = 'https://gis.apfo.usda.gov/arcgis/rest/services/NAIP/USDA_CONUS_PRIME/ImageServer/tile/{z}/{y}/{x}';
+    state.photos['naip_usgs'] = {
+      id: 'naip_usgs',
+      source: 'naip',
+      label: 'NAIP (USDA Latest)',
+      year: 'Latest',
+      status: state.photos['naip_usgs']?.status || 'unreviewed',
+      tileUrl: `${baseUrl}?token=${encodeURIComponent(token)}`,
+      maxNativeZoom: 17,
+    };
+  } else {
+    delete state.photos['naip_usgs'];
+    showToast('Add a USGS token in \u2699\ufe0f Settings to enable NAIP imagery');
+  }
+
   addEsriCurrentPhoto();
 }
 
@@ -1028,6 +1037,7 @@ function openSettings() {
   document.getElementById('settings-modal').classList.add('open');
   document.getElementById('google-maps-key-input').value = state.settings.googleMapsKey || '';
   document.getElementById('claude-key-input').value = state.settings.claudeKey || '';
+  document.getElementById('usgs-token-input').value = state.settings.usgsToken || '';
   document.getElementById('firebase-toggle').checked = state.settings.firebaseEnabled || false;
   document.getElementById('firebase-config-input').value = state.settings.firebaseConfig || '';
   document.getElementById('firebase-config-section').style.display = state.settings.firebaseEnabled ? 'block' : 'none';
@@ -1041,6 +1051,7 @@ function closeSettings() {
 function saveSettings() {
   state.settings.googleMapsKey = document.getElementById('google-maps-key-input').value.trim();
   state.settings.claudeKey = document.getElementById('claude-key-input').value.trim();
+  state.settings.usgsToken = document.getElementById('usgs-token-input').value.trim();
   state.settings.firebaseEnabled = document.getElementById('firebase-toggle').checked;
   state.settings.firebaseConfig = document.getElementById('firebase-config-input').value.trim();
   saveState();
