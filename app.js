@@ -1,7 +1,11 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v13';
+const APP_VERSION = 'my-landscaping-v14';
+
+// Saved data lives under a FIXED key so version bumps don't wipe it.
+// (Up to v13 the key was APP_VERSION itself — loadState migrates from those.)
+const STATE_KEY = 'my-landscaping-state';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
@@ -32,15 +36,33 @@ let state = {
 
 function saveState() {
   try {
-    localStorage.setItem(APP_VERSION, JSON.stringify(state));
+    localStorage.setItem(STATE_KEY, JSON.stringify(state));
   } catch (e) {
     console.warn('Failed to save state:', e);
   }
 }
 
+// Find data saved by older versions under 'my-landscaping-v{N}' keys (newest N wins)
+function findLegacyStateKey() {
+  let best = null, bestN = -1;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    const m = /^my-landscaping-v(\d+)$/.exec(key || '');
+    if (m && Number(m[1]) > bestN) { bestN = Number(m[1]); best = key; }
+  }
+  return best;
+}
+
 function loadState() {
   try {
-    const raw = localStorage.getItem(APP_VERSION);
+    let raw = localStorage.getItem(STATE_KEY);
+    if (!raw) {
+      const legacyKey = findLegacyStateKey();
+      if (legacyKey) {
+        raw = localStorage.getItem(legacyKey);
+        console.log(`Migrated saved data from ${legacyKey} to ${STATE_KEY}`);
+      }
+    }
     if (raw) {
       const saved = JSON.parse(raw);
       // Merge (preserve defaults for new keys)
@@ -114,6 +136,7 @@ let polygonFeatureGroup = null;   // shared across all maps
 let multiPolyGroups = [];         // references added to each multi map
 let previewMap = null;
 let previewPhotoId = null;
+let previewUploadLayer = null;
 
 const ESRI_IMAGERY = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const ESRI_IMAGERY_ATTR = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
@@ -356,35 +379,409 @@ function resetAllAlignments() {
   showToast('All alignments cleared.');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Uploaded photos: 4-corner image overlay (move / resize / rotate / skew)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// An uploaded photo is drawn as an <img> whose four corners are pinned to four
+// lat/lng points (NW, NE, SE, SW = image top-left, top-right, bottom-right,
+// bottom-left). A CSS matrix3d (projective transform) maps the image rectangle
+// onto those four screen points, so any placement is possible — including the
+// trapezoid shape that a ground-level photo covers.
+
+const UPLOAD_PANE = 'uploadPane';    // between tiles (200) and polygons (400)
+const UPLOAD_DEFAULT_OPACITY = 0.8;
+
+// 3×3 matrix helpers for the projective transform (row-major arrays of 9)
+function m3adj(m) {
+  return [
+    m[4]*m[8]-m[5]*m[7], m[2]*m[7]-m[1]*m[8], m[1]*m[5]-m[2]*m[4],
+    m[5]*m[6]-m[3]*m[8], m[0]*m[8]-m[2]*m[6], m[2]*m[3]-m[0]*m[5],
+    m[3]*m[7]-m[4]*m[6], m[1]*m[6]-m[0]*m[7], m[0]*m[4]-m[1]*m[3],
+  ];
+}
+function m3mul(a, b) {
+  const c = new Array(9);
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      c[3*i+j] = a[3*i]*b[j] + a[3*i+1]*b[3+j] + a[3*i+2]*b[6+j];
+  return c;
+}
+function m3vec(m, v) {
+  return [m[0]*v[0]+m[1]*v[1]+m[2]*v[2], m[3]*v[0]+m[4]*v[1]+m[5]*v[2], m[6]*v[0]+m[7]*v[1]+m[8]*v[2]];
+}
+// Matrix sending the unit basis to 4 points p[0..3] ({x,y})
+function m3basis(p) {
+  const m = [p[0].x, p[1].x, p[2].x, p[0].y, p[1].y, p[2].y, 1, 1, 1];
+  const v = m3vec(m3adj(m), [p[3].x, p[3].y, 1]);
+  return m3mul(m, [v[0], 0, 0, 0, v[1], 0, 0, 0, v[2]]);
+}
+// CSS matrix3d() mapping 4 source points onto 4 destination points
+function projectiveMatrix3d(src, dst) {
+  const t = m3mul(m3basis(dst), m3adj(m3basis(src)));
+  const n = t.map(x => x / t[8]);
+  return `matrix3d(${n[0]},${n[3]},0,${n[6]},${n[1]},${n[4]},0,${n[7]},0,0,1,0,${n[2]},${n[5]},0,${n[8]})`;
+}
+
+const CornerImageLayer = L.Layer.extend({
+  options: { opacity: UPLOAD_DEFAULT_OPACITY, pane: UPLOAD_PANE },
+
+  initialize(url, corners, width, height, options) {
+    this._url = url;
+    this._corners = corners.map(c => L.latLng(c));
+    this._w = width;
+    this._h = height;
+    L.setOptions(this, options);
+  },
+
+  onAdd(map) {
+    if (!map.getPane(UPLOAD_PANE)) {
+      const pane = map.createPane(UPLOAD_PANE);
+      pane.style.zIndex = 350;
+      pane.style.pointerEvents = 'none';
+    }
+    if (!this._img) {
+      const img = this._img = L.DomUtil.create('img', 'corner-image-layer');
+      img.src = this._url;
+      img.alt = '';
+      img.draggable = false;
+      Object.assign(img.style, {
+        position: 'absolute', left: '0', top: '0',
+        width: `${this._w}px`, height: `${this._h}px`,
+        maxWidth: 'none', transformOrigin: '0 0', pointerEvents: 'none',
+      });
+      if (map.options.zoomAnimation && L.Browser.any3d) L.DomUtil.addClass(img, 'leaflet-zoom-animated');
+    }
+    this._img.style.opacity = this.options.opacity;
+    this.getPane().appendChild(this._img);
+    this._reset();
+  },
+
+  onRemove() { L.DomUtil.remove(this._img); },
+
+  getEvents() {
+    const events = { viewreset: this._reset, zoomend: this._reset, resize: this._reset };
+    if (this._map._zoomAnimated) events.zoomanim = this._animateZoom;
+    return events;
+  },
+
+  // Release the image's memory (object URL). Call when the layer is discarded.
+  dispose() {
+    if (this._map) this._map.removeLayer(this);
+    if (this._url) { URL.revokeObjectURL(this._url); this._url = null; }
+  },
+
+  getCorners() { return this._corners.map(c => [c.lat, c.lng]); },
+  setCorners(corners) { this._corners = corners.map(c => L.latLng(c)); this._reset(); return this; },
+  getBounds() { return L.latLngBounds(this._corners); },
+  setOpacity(o) { this.options.opacity = o; if (this._img) this._img.style.opacity = o; return this; },
+  getImageSize() { return { w: this._w, h: this._h }; },
+
+  _animateZoom(e) {
+    this._apply(this._corners.map(c => this._map._latLngToNewLayerPoint(c, e.zoom, e.center)));
+  },
+
+  _reset() {
+    if (!this._map || !this._img) return;
+    this._apply(this._corners.map(c => this._map.latLngToLayerPoint(c)));
+  },
+
+  _apply(pts) {
+    const w = this._w, h = this._h;
+    const src = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+    this._img.style.transform = projectiveMatrix3d(src, pts);
+  },
+});
+
+// Starting corners: the photo at its own proportions, centered in `bounds`
+// ([[s,w],[n,e]]). Falls back to a ~30 m box around the map center.
+function defaultCorners(bounds, imgW, imgH) {
+  const crs = L.CRS.EPSG3857, Z = 22; // high zoom = fine pixel precision
+  let sw, ne;
+  if (bounds && bounds[0][0] !== bounds[1][0] && bounds[0][1] !== bounds[1][1]) {
+    sw = crs.latLngToPoint(L.latLng(bounds[0]), Z);
+    ne = crs.latLngToPoint(L.latLng(bounds[1]), Z);
+  } else {
+    const c = crs.latLngToPoint(L.latLng(state.center.lat, state.center.lng), Z);
+    const half = 15 / (crs.distance(crs.pointToLatLng(c, Z), crs.pointToLatLng(c.add([1, 0]), Z)) || 1);
+    sw = c.add([-half, half]);
+    ne = c.add([half, -half]);
+  }
+  const cx = (sw.x + ne.x) / 2, cy = (sw.y + ne.y) / 2;
+  const boxW = Math.abs(ne.x - sw.x), boxH = Math.abs(sw.y - ne.y);
+  const ratio = imgW / imgH;
+  let w = boxW, h = boxW / ratio;
+  if (h > boxH) { h = boxH; w = boxH * ratio; }
+  const toLL = (x, y) => { const ll = crs.pointToLatLng(L.point(x, y), Z); return [ll.lat, ll.lng]; };
+  return [
+    toLL(cx - w/2, cy - h/2), toLL(cx + w/2, cy - h/2),
+    toLL(cx + w/2, cy + h/2), toLL(cx - w/2, cy + h/2),
+  ];
+}
+
+function getImageDims(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// Build (but don't add) the overlay layer for an uploaded photo.
+// Returns null if the image isn't stored on this device.
+async function createUploadLayer(photo) {
+  const blob = await loadImage(photo.id);
+  if (!blob) {
+    showToast('This photo’s image isn’t stored on this device');
+    return null;
+  }
+  const url = URL.createObjectURL(blob);
+  let dims;
+  try { dims = await getImageDims(url); }
+  catch (e) { URL.revokeObjectURL(url); showToast('Could not read this photo'); return null; }
+
+  if (!photo.corners) {
+    photo.corners = defaultCorners(photo.bounds, dims.w, dims.h);
+    saveState();
+  }
+  return new CornerImageLayer(url, photo.corners, dims.w, dims.h, {
+    opacity: photo.opacity ?? UPLOAD_DEFAULT_OPACITY,
+  });
+}
+
+// ── Single view: show the selected photo (tiles or upload) ───────────────────
+
+let mainUploadLayer = null;
+let mainPhotoSeq = 0;   // guards against out-of-order async loads
+
+function setMainPhoto(photoId) {
+  if (photoAdjust) exitPhotoAdjust(true);
+  if (mainUploadLayer) { mainUploadLayer.dispose(); mainUploadLayer = null; }
+  const seq = ++mainPhotoSeq;
+
+  const photo = photoId ? state.photos[photoId] : null;
+  const isUpload = !!photo && photo.source === 'upload';
+  setMainTileLayer(isUpload ? ESRI_IMAGERY : (photo && photo.tileUrl) || ESRI_IMAGERY);
+  updatePhotoToolButtons(isUpload);
+  if (!isUpload) return;
+
+  createUploadLayer(photo).then(layer => {
+    if (!layer) return;
+    if (seq !== mainPhotoSeq) { layer.dispose(); return; }  // user picked another photo meanwhile
+    mainUploadLayer = layer.addTo(mapMain);
+    // Bring the photo into view if it's off-screen
+    if (!mapMain.getBounds().intersects(layer.getBounds())) {
+      mapMain.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 21 });
+    }
+  });
+}
+
+// Show "Adjust" only for uploads; Align applies to satellite photos only
+function updatePhotoToolButtons(isUpload) {
+  document.getElementById('photo-adjust-btn').style.display = isUpload ? '' : 'none';
+  document.getElementById('align-btn').style.display = isUpload ? 'none' : '';
+}
+
+// ── Adjust mode: drag handles to move / resize+rotate / bend the photo ───────
+
+let photoAdjust = null; // { photo, layer, mode: 'rigid'|'free', handles[], centerHandle, original, originalOpacity }
+
+function makeHandleIcon(kind) {
+  return L.divIcon({
+    className: `photo-handle photo-handle-${kind}`,
+    html: '<span></span>',
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+  });
+}
+
+function cornerCentroid(corners) {
+  const n = corners.length;
+  return [corners.reduce((s, c) => s + c[0], 0) / n, corners.reduce((s, c) => s + c[1], 0) / n];
+}
+
+function syncAdjustHandles() {
+  const corners = photoAdjust.layer.getCorners();
+  photoAdjust.handles.forEach((h, i) => h.setLatLng(corners[i]));
+  photoAdjust.centerHandle.setLatLng(cornerCentroid(corners));
+}
+
+function enterPhotoAdjust() {
+  const photo = getCurrentMainPhoto();
+  if (!photo || photo.source !== 'upload') return;
+  if (!mainUploadLayer) { showToast('Photo is still loading — try again'); return; }
+  setDrawMode('none');
+  if (alignClickMode) exitAlignClickMode();
+
+  const layer = mainUploadLayer;
+  photoAdjust = {
+    photo, layer, mode: 'rigid', handles: [], centerHandle: null,
+    original: layer.getCorners(), originalOpacity: layer.options.opacity,
+  };
+
+  // Corner handles
+  layer.getCorners().forEach((c, i) => {
+    let start = null; // { pts: layer points of all corners, center } at drag start
+    const h = L.marker(c, { icon: makeHandleIcon('corner'), draggable: true, keyboard: false, zIndexOffset: 1000 })
+      .addTo(mapMain);
+    h.on('dragstart', () => {
+      const pts = layer.getCorners().map(cc => mapMain.project(cc));
+      const cx = pts.reduce((s, p) => s + p.x, 0) / 4, cy = pts.reduce((s, p) => s + p.y, 0) / 4;
+      start = { pts, center: L.point(cx, cy) };
+    });
+    h.on('drag', e => {
+      if (!start) return;
+      const p = mapMain.project(e.target.getLatLng());
+      let corners;
+      if (photoAdjust.mode === 'free') {
+        corners = layer.getCorners();
+        const ll = e.target.getLatLng();
+        corners[i] = [ll.lat, ll.lng];
+      } else {
+        // Rigid: scale + rotate all corners about the center, keeping proportions
+        const v0 = start.pts[i].subtract(start.center), v1 = p.subtract(start.center);
+        const len0 = Math.hypot(v0.x, v0.y);
+        if (len0 < 1) return;
+        const s = Math.max(0.05, Math.hypot(v1.x, v1.y) / len0);
+        const a = Math.atan2(v1.y, v1.x) - Math.atan2(v0.y, v0.x);
+        const cos = Math.cos(a) * s, sin = Math.sin(a) * s;
+        corners = start.pts.map(q => {
+          const dx = q.x - start.center.x, dy = q.y - start.center.y;
+          const ll = mapMain.unproject(L.point(start.center.x + dx*cos - dy*sin, start.center.y + dx*sin + dy*cos));
+          return [ll.lat, ll.lng];
+        });
+      }
+      layer.setCorners(corners);
+      // Move the other handles to match (not the one being dragged)
+      const latest = layer.getCorners();
+      photoAdjust.handles.forEach((hh, j) => { if (j !== i) hh.setLatLng(latest[j]); });
+      photoAdjust.centerHandle.setLatLng(cornerCentroid(latest));
+    });
+    h.on('dragend', () => { start = null; syncAdjustHandles(); });
+    photoAdjust.handles.push(h);
+  });
+
+  // Center handle: move the whole photo
+  let moveStart = null;
+  const ch = L.marker(cornerCentroid(layer.getCorners()), {
+    icon: makeHandleIcon('center'), draggable: true, keyboard: false, zIndexOffset: 1001,
+  }).addTo(mapMain);
+  ch.on('dragstart', () => {
+    moveStart = {
+      pts: layer.getCorners().map(cc => mapMain.project(cc)),
+      from: mapMain.project(ch.getLatLng()),
+    };
+  });
+  ch.on('drag', e => {
+    if (!moveStart) return;
+    const d = mapMain.project(e.target.getLatLng()).subtract(moveStart.from);
+    layer.setCorners(moveStart.pts.map(q => {
+      const ll = mapMain.unproject(q.add(d));
+      return [ll.lat, ll.lng];
+    }));
+    const latest = layer.getCorners();
+    photoAdjust.handles.forEach((hh, j) => hh.setLatLng(latest[j]));
+  });
+  ch.on('dragend', () => { moveStart = null; syncAdjustHandles(); });
+  photoAdjust.centerHandle = ch;
+
+  // Toolbar state
+  document.getElementById('photo-adjust-bar').classList.add('open');
+  document.getElementById('photo-opacity-input').value = Math.round(layer.options.opacity * 100);
+  setAdjustMode('rigid');
+  document.getElementById('photo-adjust-btn').classList.add('active');
+  document.querySelectorAll('#draw-toolbar .draw-btn').forEach(b => {
+    if (b.id === 'photo-adjust-btn') return;
+    b.dataset.adjustDisabled = b.disabled ? 'was' : 'yes';  // remember buttons that were already disabled
+    b.disabled = true;
+  });
+}
+
+function setAdjustMode(mode) {
+  if (!photoAdjust) return;
+  photoAdjust.mode = mode;
+  document.getElementById('adjust-mode-rigid').classList.toggle('active', mode === 'rigid');
+  document.getElementById('adjust-mode-free').classList.toggle('active', mode === 'free');
+  showToast(mode === 'rigid'
+    ? 'Drag a corner to resize/rotate • drag the center to move'
+    : 'Drag each corner on its own to bend the photo');
+}
+
+function resetPhotoAdjust() {
+  if (!photoAdjust) return;
+  const { w, h } = photoAdjust.layer.getImageSize();
+  photoAdjust.layer.setCorners(defaultCorners(photoAdjust.photo.bounds, w, h));
+  syncAdjustHandles();
+}
+
+function exitPhotoAdjust(save) {
+  if (!photoAdjust) return;
+  const { photo, layer } = photoAdjust;
+  photoAdjust.handles.forEach(h => mapMain.removeLayer(h));
+  mapMain.removeLayer(photoAdjust.centerHandle);
+
+  if (save) {
+    photo.corners = layer.getCorners();
+    photo.opacity = layer.options.opacity;
+    saveState();
+    syncFirebase();
+    refreshMultiUploadLayers(photo.id);
+  } else {
+    layer.setCorners(photoAdjust.original);
+    layer.setOpacity(photoAdjust.originalOpacity);
+  }
+  photoAdjust = null;
+
+  document.getElementById('photo-adjust-bar').classList.remove('open');
+  document.getElementById('photo-adjust-btn').classList.remove('active');
+  document.querySelectorAll('#draw-toolbar .draw-btn').forEach(b => {
+    if (b.dataset.adjustDisabled) { b.disabled = b.dataset.adjustDisabled === 'was'; delete b.dataset.adjustDisabled; }
+  });
+}
+
+// ── Multi view ───────────────────────────────────────────────────────────────
+
+let multiUploadLayers = [null, null, null, null];
+let multiPaneSeq = [0, 0, 0, 0];
+
+// After the photo is adjusted in Single view, update any Multi-view pane showing it
+function refreshMultiUploadLayers(photoId) {
+  const photo = state.photos[photoId];
+  if (!photo) return;
+  multiUploadLayers.forEach((layer, i) => {
+    if (layer && state.multiViewPhotos[i] === photoId) {
+      layer.setCorners(photo.corners).setOpacity(photo.opacity ?? UPLOAD_DEFAULT_OPACITY);
+    }
+  });
+}
+
 function setMultiPanePhoto(paneIdx, photoId) {
-  if (!mapMulti[paneIdx]) return;
+  const map = mapMulti[paneIdx];
+  if (!map) return;
   state.multiViewPhotos[paneIdx] = photoId;
   saveState();
 
-  if (multiTileLayers[paneIdx]) mapMulti[paneIdx].removeLayer(multiTileLayers[paneIdx]);
+  if (multiTileLayers[paneIdx]) map.removeLayer(multiTileLayers[paneIdx]);
+  if (multiUploadLayers[paneIdx]) { multiUploadLayers[paneIdx].dispose(); multiUploadLayers[paneIdx] = null; }
+  const seq = ++multiPaneSeq[paneIdx];
 
   const photo = state.photos[photoId];
-  if (!photo || !photo.tileUrl) {
-    multiTileLayers[paneIdx] = L.tileLayer(ESRI_IMAGERY, { maxZoom: 22, maxNativeZoom: 19 }).addTo(mapMulti[paneIdx]);
-    return;
-  }
+  const isUpload = !!photo && photo.source === 'upload';
 
-  if (photo.source === 'upload') {
-    // For uploaded images, show a simple bounds-overlay
-    loadImage(photoId).then(blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const bounds = photo.bounds || mapMain.getBounds();
-      const overlay = L.imageOverlay(url, bounds).addTo(mapMulti[paneIdx]);
-      multiTileLayers[paneIdx] = overlay;
+  // Uploads sit on top of the current Esri imagery so the surroundings aren't blank
+  multiTileLayers[paneIdx] = L.tileLayer(
+    isUpload ? ESRI_IMAGERY : (photo && photo.tileUrl) || ESRI_IMAGERY,
+    { maxZoom: 22, maxNativeZoom: 19 },
+  ).addTo(map);
+
+  if (isUpload) {
+    createUploadLayer(photo).then(layer => {
+      if (!layer) return;
+      if (seq !== multiPaneSeq[paneIdx]) { layer.dispose(); return; }
+      multiUploadLayers[paneIdx] = layer.addTo(map);
     });
-    return;
   }
-
-  multiTileLayers[paneIdx] = L.tileLayer(photo.tileUrl, {
-    maxZoom: 22,
-    maxNativeZoom: 19,
-  }).addTo(mapMulti[paneIdx]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1016,11 +1413,47 @@ function updateMultiPaneSelects() {
 // Photo upload
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Starting placement box for a new upload: centered on the property, about half
+// the width of the main map view. Computed from the saved center/zoom because
+// the main map is hidden while the Photo Library tab is open.
+function uploadStartBounds() {
+  const crs = L.CRS.EPSG3857;
+  const z = state.zoom || 19;
+  const size = mapMain && mapMain.getSize().x > 0 ? mapMain.getSize() : L.point(400, 400);
+  const c = crs.latLngToPoint(L.latLng(state.center.lat, state.center.lng), z);
+  const half = Math.min(size.x, size.y) / 4;
+  const sw = crs.pointToLatLng(c.add([-half, half]), z);
+  const ne = crs.pointToLatLng(c.add([half, -half]), z);
+  return [[sw.lat, sw.lng], [ne.lat, ne.lng]];
+}
+
+// Shrink big phone photos (e.g. 4032×3024) so they don't exhaust memory on the
+// iPhone when shown in several maps at once. Returns the original if it's small.
+const UPLOAD_MAX_PX = 2048;
+async function downscaleImage(file) {
+  try {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    URL.revokeObjectURL(url);
+    const scale = Math.min(1, UPLOAD_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    if (scale === 1) return file;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.88));
+    return blob || file;
+  } catch (e) {
+    console.warn('Could not downscale upload, storing original:', e);
+    return file;
+  }
+}
+
 async function handleUploadFiles(files) {
   for (const file of files) {
     const id = `upload_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const bounds = mapMain ? mapMain.getBounds() : null;
-    const boundsArr = bounds ? [[bounds.getSouth(), bounds.getWest()], [bounds.getNorth(), bounds.getEast()]] : null;
+    const boundsArr = uploadStartBounds();
 
     state.photos[id] = {
       id,
@@ -1033,7 +1466,7 @@ async function handleUploadFiles(files) {
       uploadKey: id,
     };
 
-    await saveImage(id, file);
+    await saveImage(id, await downscaleImage(file));
     showToast(`Uploaded: ${file.name}`);
   }
 
@@ -1207,6 +1640,7 @@ function showPhotoPreview(photoId) {
 
   document.getElementById('photo-preview-modal').classList.add('open');
 
+  if (previewUploadLayer) { previewUploadLayer.dispose(); previewUploadLayer = null; }
   if (previewMap) { previewMap.remove(); previewMap = null; }
 
   requestAnimationFrame(() => {
@@ -1220,11 +1654,12 @@ function showPhotoPreview(photoId) {
 
     if (photo.source === 'upload') {
       L.tileLayer(ESRI_IMAGERY, { maxZoom: 22, maxNativeZoom: 19 }).addTo(previewMap);
-      loadImage(photoId).then(blob => {
-        if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const bounds = photo.bounds || previewMap.getBounds();
-        L.imageOverlay(url, bounds, { opacity: 0.85 }).addTo(previewMap);
+      const forMap = previewMap;
+      createUploadLayer(photo).then(layer => {
+        if (!layer) return;
+        if (previewMap !== forMap) { layer.dispose(); return; }  // preview closed meanwhile
+        previewUploadLayer = layer.addTo(previewMap);
+        previewMap.fitBounds(layer.getBounds(), { padding: [20, 20], maxZoom: 21 });
       });
     } else if (photo.tileUrl) {
       L.tileLayer(photo.tileUrl, { maxZoom: 22, maxNativeZoom: nativeZoom }).addTo(previewMap);
@@ -1235,6 +1670,7 @@ function showPhotoPreview(photoId) {
 function closePhotoPreview() {
   document.getElementById('photo-preview-modal').classList.remove('open');
   previewPhotoId = null;
+  if (previewUploadLayer) { previewUploadLayer.dispose(); previewUploadLayer = null; }
   if (previewMap) { previewMap.remove(); previewMap = null; }
 }
 
@@ -1435,7 +1871,9 @@ function wireEvents() {
 
   document.getElementById('clear-data-btn').addEventListener('click', () => {
     if (!confirm('Clear all local data? This cannot be undone.')) return;
-    localStorage.removeItem(APP_VERSION);
+    localStorage.removeItem(STATE_KEY);
+    // Also remove old per-version keys, or loadState would migrate them back
+    while (findLegacyStateKey()) localStorage.removeItem(findLegacyStateKey());
     location.reload();
   });
 
@@ -1451,11 +1889,11 @@ function wireEvents() {
     switchView('single');
     // Set main map tile to first kept photo
     const firstKept = Object.values(state.photos).find(p => p.status === 'keep');
-    if (firstKept && firstKept.tileUrl) {
-      setMainTileLayer(firstKept.tileUrl);
+    if (firstKept) {
       state.mainViewPhoto = firstKept.id;
       document.getElementById('main-photo-select').value = firstKept.id;
       saveState();
+      setMainPhoto(firstKept.id);
     }
     document.getElementById('welcome-overlay').classList.add('hidden');
     showToast('Photo review complete');
@@ -1489,12 +1927,23 @@ function wireEvents() {
     const photoId = e.target.value;
     state.mainViewPhoto = photoId || null;
     saveState();
-    const photo = state.photos[photoId];
-    if (photo && photo.tileUrl) {
-      setMainTileLayer(photo.tileUrl);
-    } else if (!photoId) {
-      setMainTileLayer(ESRI_IMAGERY);
-    }
+    setMainPhoto(photoId);
+  });
+
+  // Adjust uploaded photo
+  document.getElementById('photo-adjust-btn').addEventListener('click', () => {
+    if (photoAdjust) exitPhotoAdjust(true); else enterPhotoAdjust();
+  });
+  document.getElementById('adjust-mode-rigid').addEventListener('click', () => setAdjustMode('rigid'));
+  document.getElementById('adjust-mode-free').addEventListener('click', () => setAdjustMode('free'));
+  document.getElementById('photo-opacity-input').addEventListener('input', e => {
+    if (photoAdjust) photoAdjust.layer.setOpacity(Number(e.target.value) / 100);
+  });
+  document.getElementById('adjust-reset-btn').addEventListener('click', resetPhotoAdjust);
+  document.getElementById('adjust-cancel-btn').addEventListener('click', () => exitPhotoAdjust(false));
+  document.getElementById('adjust-done-btn').addEventListener('click', () => {
+    exitPhotoAdjust(true);
+    showToast('Photo placement saved');
   });
 
   // Align buttons
@@ -1543,7 +1992,7 @@ async function boot() {
   loadState();
 
   // Version badge
-  document.getElementById('version-badge').textContent = APP_VERSION.replace('my-landscaping-', 'v');
+  document.getElementById('version-badge').textContent = APP_VERSION.replace('my-landscaping-', '');
 
   // Restore address input
   document.getElementById('address-input').value = state.address || '';
@@ -1564,8 +2013,8 @@ async function boot() {
   // Restore single-view selected photo
   if (state.mainViewPhoto && state.photos[state.mainViewPhoto]) {
     document.getElementById('main-photo-select').value = state.mainViewPhoto;
-    setMainTileLayer(state.photos[state.mainViewPhoto].tileUrl);
   }
+  setMainPhoto(state.mainViewPhoto && state.photos[state.mainViewPhoto] ? state.mainViewPhoto : null);
 
   // Restore alignment anchor marker and reset button visibility
   if (state.alignAnchor) placeAnchorMarker(state.alignAnchor.lat, state.alignAnchor.lng);

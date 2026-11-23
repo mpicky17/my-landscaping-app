@@ -578,6 +578,76 @@
     }
     #align-reset-btn.visible { display: inline; }
 
+    /* Keep the map's +/- zoom buttons below the "Select photo" dropdown */
+    #map-main .leaflet-top.leaflet-left { top: 40px; }
+
+    /* ── Uploaded-photo adjust mode ── */
+    .photo-adjust-bar {
+      display: none;
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: calc(58px + env(safe-area-inset-bottom));
+      z-index: 1000;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      padding: 8px 10px;
+      flex-direction: column;
+      gap: 8px;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    .photo-adjust-bar.open { display: flex; }
+    .adjust-row { display: flex; align-items: center; gap: 8px; }
+    .adjust-segment {
+      display: flex; flex: 1;
+      border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    }
+    .adjust-seg-btn, .adjust-action-btn {
+      flex: 1;
+      border: none;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 6px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    .adjust-seg-btn + .adjust-seg-btn { border-left: 1px solid var(--border); }
+    .adjust-seg-btn.active { background: var(--green); color: #fff; }
+    .adjust-action-btn { border: 1px solid var(--border); border-radius: 8px; }
+    .adjust-action-btn.primary { background: var(--green); color: #fff; border-color: var(--green-dark); }
+    .adjust-opacity-label { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+    #photo-opacity-input { flex: 1; accent-color: var(--green); touch-action: manipulation; }
+
+    /* Drag handles: 44px touch target, smaller visible dot */
+    .photo-handle { background: none; border: none; touch-action: none; }
+    .photo-handle span {
+      position: absolute; left: 50%; top: 50%;
+      width: 18px; height: 18px; margin: -9px 0 0 -9px;
+      border-radius: 50%;
+      background: #fff;
+      border: 3px solid var(--green);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+    .photo-handle-center span {
+      width: 24px; height: 24px; margin: -12px 0 0 -12px;
+      background: var(--green); border-color: #fff;
+    }
+    .photo-handle-center span::after {
+      content: '\2725'; position: absolute; inset: 0;
+      color: #fff; font-size: 14px; line-height: 18px; text-align: center;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .photo-handle span { background: #1e293b; }
+      .photo-handle-center span { background: var(--green); border-color: #1e293b; }
+    }
+
     /* ── Polygon list sidebar (collapsible) ── */
     .polygon-panel {
       position: absolute;
@@ -1088,6 +1158,25 @@
         <p class="welcome-text">Enter a property address above to load satellite imagery and start mapping.</p>
       </div>
 
+      <!-- Uploaded-photo adjust bar (shown while adjusting) -->
+      <div class="photo-adjust-bar" id="photo-adjust-bar">
+        <div class="adjust-row">
+          <div class="adjust-segment">
+            <button class="adjust-seg-btn active" id="adjust-mode-rigid">Resize / Rotate</button>
+            <button class="adjust-seg-btn" id="adjust-mode-free">Free corners</button>
+          </div>
+        </div>
+        <div class="adjust-row">
+          <label class="adjust-opacity-label" for="photo-opacity-input">Opacity</label>
+          <input type="range" id="photo-opacity-input" min="15" max="100" value="80" />
+        </div>
+        <div class="adjust-row">
+          <button class="adjust-action-btn" id="adjust-reset-btn">Reset</button>
+          <button class="adjust-action-btn" id="adjust-cancel-btn">Cancel</button>
+          <button class="adjust-action-btn primary" id="adjust-done-btn">Done</button>
+        </div>
+      </div>
+
       <!-- Drawing toolbar -->
       <div class="draw-toolbar" id="draw-toolbar">
         <button class="draw-btn" id="draw-polygon-btn">&#9643; Draw</button>
@@ -1095,6 +1184,7 @@
         <button class="draw-btn" id="draw-delete-btn">&#128465; Delete</button>
         <button class="draw-btn" id="ai-detect-btn" disabled title="Coming soon">&#129302; AI</button>
         <button class="draw-btn" id="align-btn" title="Align photos by reference point">&#128205; Align</button>
+        <button class="draw-btn" id="photo-adjust-btn" title="Move, resize, rotate or bend this uploaded photo" style="display:none">&#128444; Adjust</button>
         <button id="align-reset-btn" title="Clear all alignments">&#10005;</button>
         <button class="draw-btn" id="toggle-panel-btn">&#9776;</button>
       </div>
