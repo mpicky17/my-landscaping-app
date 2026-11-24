@@ -578,6 +578,158 @@
     }
     #align-reset-btn.visible { display: inline; }
 
+    /* ── Yard areas (outline-only polygons) ── */
+    .area-label-tooltip {
+      background: rgba(0,0,0,0.55) !important;
+      border: 1px solid #facc15 !important;
+      color: #fde047 !important;
+      font-weight: 700;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      box-shadow: none !important;
+    }
+    .area-label-tooltip::before { display: none; }
+    .area-swatch {
+      background: transparent !important;
+      border: 2px dashed #ca8a04 !important;
+    }
+    .polygon-item.is-area .polygon-item-label { font-weight: 600; }
+    .polygon-item-issues {
+      font-size: 0.7rem; color: #b45309; background: #fef3c7;
+      border-radius: 10px; padding: 1px 7px; white-space: nowrap;
+    }
+    .label-section-title { font-size: 0.85rem; font-weight: 600; margin: 4px 0 8px; }
+    .label-section-title span { font-weight: 400; color: var(--text-muted); font-size: 0.75rem; }
+    .area-btn-count {
+      margin-left: auto; font-size: 0.7rem; background: #fef3c7; color: #b45309;
+      border-radius: 10px; padding: 1px 7px;
+    }
+
+    /* ── Polygon popup: linked issues ── */
+    .poly-popup-kind { font-size: 0.65rem; font-weight: 600; color: #a16207; background: #fef9c3; border-radius: 8px; padding: 1px 6px; vertical-align: middle; }
+    .poly-popup-issues { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .poly-popup-issues-title { font-size: 0.7rem; font-weight: 600; color: #6b7280; text-transform: uppercase; }
+    .poly-popup-issue {
+      display: flex; align-items: center; gap: 6px; text-align: left;
+      border: 1px solid #e5e7eb; background: #fff; color: #111827; border-radius: 6px;
+      padding: 5px 7px; font-size: 0.8rem; font-family: inherit; cursor: pointer; touch-action: manipulation;
+    }
+    .poly-popup-issue.add { color: #16a34a; border-style: dashed; justify-content: center; }
+    .status-dot { width: 9px; height: 9px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+
+    /* ── Issue pins ── */
+    .issue-pin-wrap { background: none; border: none; }
+    .issue-pin {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px; border: 2px solid #fff; cursor: pointer;
+    }
+    .issue-pin.resolved { opacity: 0.55; }
+
+    /* ── Issues tab ── */
+    .issues-page {
+      flex: 1; overflow-y: auto; padding: 12px;
+      display: flex; flex-direction: column; gap: 10px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+    .lawn-profile-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    }
+    .lawn-profile-card summary { font-weight: 600; font-size: 0.9rem; cursor: pointer; touch-action: manipulation; }
+    .lawn-profile-count { font-weight: 400; color: var(--text-muted); font-size: 0.75rem; margin-left: 6px; }
+    #lawn-profile-fields { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .profile-row { display: flex; flex-direction: column; gap: 3px; }
+    .profile-row span { font-size: 0.75rem; color: var(--text-muted); }
+    .issue-filter { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .issue-filter-btn {
+      flex: 1; border: none; background: var(--surface); color: var(--text); padding: 8px;
+      font-size: 0.85rem; font-family: inherit; cursor: pointer; touch-action: manipulation;
+    }
+    .issue-filter-btn + .issue-filter-btn { border-left: 1px solid var(--border); }
+    .issue-filter-btn.active { background: var(--green); color: #fff; }
+    .issue-empty { text-align: center; color: var(--text-muted); font-size: 0.9rem; padding: 30px 10px; line-height: 1.6; }
+    .issue-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+    .issue-group-head {
+      display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.85rem;
+      text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 4px 2px 0;
+    }
+    .issue-group-tag {
+      font-size: 0.65rem; font-weight: 500; text-transform: none; letter-spacing: 0;
+      border: 1px dashed var(--border); border-radius: 10px; padding: 1px 7px;
+    }
+    .issue-group-tag.drawn { border: 1px solid #ca8a04; color: #a16207; }
+    .issue-card {
+      display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+      background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px; font-family: inherit; cursor: pointer; touch-action: manipulation;
+    }
+    .issue-card:active { background: var(--green-light); }
+    .issue-card-icon {
+      width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+    .issue-card-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .issue-card-title { font-weight: 600; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .issue-card-sub { font-size: 0.78rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status-chip { color: #fff; font-size: 0.7rem; font-weight: 600; border-radius: 10px; padding: 2px 8px; flex-shrink: 0; }
+
+    /* ── Issue detail sheet ── */
+    .issue-modal { max-width: 600px; }
+    .issue-input, .issue-title-input {
+      width: 100%; font-size: 1rem; font-family: inherit;
+      border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+      background: var(--bg); color: var(--text); touch-action: manipulation; min-width: 0;
+    }
+    textarea.issue-input { resize: vertical; field-sizing: content; min-height: 2.4em; }
+    .issue-input:focus, .issue-title-input:focus { outline: 2px solid var(--green); border-color: transparent; }
+    .issue-title-input { font-weight: 700; font-size: 1.05rem; margin-bottom: 10px; }
+    .issue-row2 { display: flex; gap: 8px; margin-bottom: 10px; }
+    .issue-row2 > label { flex: 1; min-width: 0; }
+    .issue-row2 > label > span, .issue-block > span {
+      display: block; font-size: 0.75rem; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;
+    }
+    .issue-map-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .issue-map-row select { flex: 1 1 180px; width: auto; }
+    .issue-block { display: block; margin-bottom: 14px; }
+    .plan-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+    .plan-item { display: flex; align-items: flex-start; gap: 8px; }
+    .plan-item input[type="checkbox"] { width: 22px; height: 22px; margin-top: 8px; accent-color: var(--green); flex-shrink: 0; }
+    .plan-text { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .plan-timing { font-size: 1rem; color: var(--text-muted); }
+    .icon-btn {
+      background: none; border: none; color: var(--text-muted); font-size: 1rem; cursor: pointer;
+      padding: 6px 8px; touch-action: manipulation;
+    }
+    .btn.small { padding: 6px 12px; font-size: 0.8rem; }
+    .entry-add {
+      display: flex; flex-direction: column; gap: 6px; padding: 8px;
+      border: 1px dashed var(--border); border-radius: 8px; margin-bottom: 8px;
+    }
+    .entry-add .issue-row2 { margin-bottom: 0; }
+    .entry { border-left: 3px solid var(--border); padding: 4px 0 4px 10px; margin-bottom: 8px; }
+    .entry-head { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; }
+    .entry-date { color: var(--text-muted); font-weight: 600; }
+    .entry-source { border-radius: 8px; padding: 1px 7px; font-weight: 600; background: var(--border); color: var(--text); }
+    .entry-source.src-google-ai { background: #dbeafe; color: #1d4ed8; }
+    .entry-source.src-claude { background: #fde68a; color: #92400e; }
+    .entry-head .icon-btn { margin-left: auto; font-size: 0.8rem; padding: 2px 6px; }
+    .entry-text { font-size: 0.9rem; white-space: pre-wrap; line-height: 1.45; }
+    .issue-footer {
+      display: flex; gap: 8px; flex-wrap: wrap; position: sticky; bottom: -20px;
+      background: var(--surface); padding: 10px 0 4px; border-top: 1px solid var(--border);
+    }
+    .issue-footer .btn { flex: 1 1 auto; }
+    #copy-text { font-size: 1rem; }
+
+    @media (prefers-color-scheme: dark) {
+      .polygon-item-issues, .area-btn-count { background: #422006; color: #fcd34d; }
+      .issue-group-tag.drawn { color: #fcd34d; }
+      .entry-source.src-google-ai { background: #1e3a8a; color: #bfdbfe; }
+      .entry-source.src-claude { background: #78350f; color: #fde68a; }
+    }
+
     /* Keep the map's +/- zoom buttons below the "Select photo" dropdown */
     #map-main .leaflet-top.leaflet-left { top: 40px; }
 
@@ -1135,6 +1287,7 @@
     <button class="view-tab active" data-view="single">Single View</button>
     <button class="view-tab" data-view="multi">Multi View</button>
     <button class="view-tab" data-view="photos">Photo Library</button>
+    <button class="view-tab" data-view="issues">Issues</button>
   </nav>
 
   <!-- Content area -->
@@ -1274,6 +1427,32 @@
       </div>
     </div>
 
+    <!-- Issues Panel -->
+    <div class="view-panel" id="panel-issues">
+      <div class="issues-page">
+        <div class="photo-library-header">
+          <h2>Lawn Issues</h2>
+          <div class="photo-library-actions">
+            <button class="btn btn-secondary" id="issues-copy-all-btn" title="Copy your lawn profile and open issues to paste into an AI chat">&#128203; Copy for AI</button>
+            <button class="btn btn-primary" id="issue-new-btn">+ New issue</button>
+          </div>
+        </div>
+
+        <details class="lawn-profile-card">
+          <summary>Lawn profile <span class="lawn-profile-count" id="lawn-profile-count"></span></summary>
+          <div id="lawn-profile-fields"></div>
+        </details>
+
+        <div class="issue-filter">
+          <button class="issue-filter-btn active" data-filter="active">Active</button>
+          <button class="issue-filter-btn" data-filter="resolved">Resolved</button>
+          <button class="issue-filter-btn" data-filter="all">All</button>
+        </div>
+
+        <div id="issue-list"></div>
+      </div>
+    </div>
+
   </div><!-- .content-area -->
 
   <!-- ── Label Picker Modal ── -->
@@ -1314,6 +1493,31 @@
         <input type="color" class="label-color-input" id="label-color-input" value="#22c55e" title="Pick color" />
         <button class="btn btn-primary" id="label-custom-btn">Add</button>
       </div>
+
+      <div class="label-section-title">Yard area <span>(outline only, for grouping issues)</span></div>
+      <div class="label-grid" id="area-grid"></div>
+      <div class="label-custom-row">
+        <input type="text" class="label-custom-input" id="area-custom-input" placeholder="Other area name…" />
+        <button class="btn btn-primary" id="area-custom-btn">Add area</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Issue Detail Modal ── -->
+  <div class="modal-backdrop" id="issue-modal">
+    <div class="modal issue-modal">
+      <button class="modal-close" id="issue-modal-close">&#10005;</button>
+      <div class="modal-title">Lawn issue</div>
+      <div id="issue-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ── Copy-for-AI fallback (when clipboard access is blocked) ── -->
+  <div class="modal-backdrop" id="copy-modal">
+    <div class="modal">
+      <button class="modal-close" id="copy-modal-close">&#10005;</button>
+      <div class="modal-title">Copy this into your AI chat</div>
+      <textarea id="copy-text" class="issue-input" rows="12" readonly></textarea>
     </div>
   </div>
 
@@ -1371,6 +1575,13 @@
 
       <div class="settings-section">
         <h3>Data</h3>
+        <div class="settings-row">
+          <div class="upload-btn-wrap" style="flex:1">
+            <button class="btn btn-secondary" style="width:100%">&#128229; Import notes (.json)</button>
+            <input type="file" id="import-notes-input" accept=".json,application/json" />
+          </div>
+          <button class="btn btn-secondary" id="export-notes-btn" style="flex:1">&#128228; Export notes</button>
+        </div>
         <div class="settings-row">
           <button class="btn btn-danger" id="clear-data-btn" style="flex:1">Clear All Local Data</button>
         </div>

@@ -1,7 +1,7 @@
 // app.js — My Landscaping App
 // Vanilla JS, no build step.
 
-const APP_VERSION = 'my-landscaping-v14';
+const APP_VERSION = 'my-landscaping-v15';
 
 // Saved data lives under a FIXED key so version bumps don't wipe it.
 // (Up to v13 the key was APP_VERSION itself — loadState migrates from those.)
@@ -21,6 +21,8 @@ let state = {
   mainViewPhoto: null,
   multiViewPhotos: [null, null, null, null],
   alignAnchor: null,  // { photoId, lat, lng } | null
+  issues: {},         // [id]: lawn issue (see "Lawn issues" section)
+  lawnProfile: {},    // grass type, soil, sun, mowing… (see LAWN_PROFILE_FIELDS)
   settings: {
     googleMapsKey: '',
     claudeKey: '',
@@ -158,6 +160,9 @@ function initMainMap() {
   // Shared polygon feature group
   polygonFeatureGroup = new L.FeatureGroup();
   polygonFeatureGroup.addTo(mapMain);
+
+  // Lawn-issue pins (Single view)
+  issuePinGroup = L.layerGroup().addTo(mapMain);
 
   // Drawing control
   drawControl = new L.Control.Draw({
@@ -797,6 +802,7 @@ function rebuildMultiPolyGroups() {
       group.addLayer(clone);
     });
   });
+  multiPolyGroups.forEach(sendAreasToBack);
 }
 
 function cloneLayer(layer) {
@@ -880,6 +886,7 @@ function onPolygonsEdited(e) {
   saveState();
   renderPolygonList();
   rebuildMultiPolyGroups();
+  renderIssuePins();   // pins of linked issues sit at the polygon's center
   syncFirebase();
 
   editHandler = null;
@@ -890,11 +897,12 @@ function onPolygonsEdited(e) {
 function onPolygonsDeleted(e) {
   e.layers.eachLayer(layer => {
     const id = layer._polyId;
-    if (id) delete state.polygons[id];
+    if (id) { delete state.polygons[id]; unlinkIssuesFromPolygon(id); }
   });
   saveState();
   renderPolygonList();
   rebuildMultiPolyGroups();
+  renderIssuePins();
   syncFirebase();
 
   deleteHandler = null;
@@ -902,50 +910,70 @@ function onPolygonsDeleted(e) {
   updateDrawBtnStates();
 }
 
-function addPolygonWithLabel(label, color) {
+// Yard areas ("Front yard", "Back yard"…) are big zones that contain the
+// detail shapes (lawn, mulch, trees). They're drawn as a dashed outline with no
+// fill, so they never cover or block taps on the shapes inside them.
+const AREA_COLOR = '#facc15';
+
+function isAreaFeature(feature) {
+  return !!feature && feature.properties && feature.properties.kind === 'area';
+}
+
+function stylePolygonLayer(layer, props) {
+  if (props.kind === 'area') {
+    layer.setStyle({ color: AREA_COLOR, weight: 3, dashArray: '8 6', fill: false, opacity: 0.95 });
+  } else {
+    const color = props.color || 'rgba(34,197,94,0.35)';
+    layer.setStyle({ color: color.replace(/[\d.]+\)$/, '1)'), fillColor: color, fillOpacity: 1, weight: 2 });
+  }
+  layer.bindTooltip(props.label || 'Unlabeled', {
+    permanent: true,
+    direction: 'center',
+    className: props.kind === 'area' ? 'area-label-tooltip' : 'poly-label-tooltip',
+  });
+}
+
+// Keep area outlines underneath the detail shapes
+function sendAreasToBack(group) {
+  group.eachLayer(layer => {
+    if (isAreaFeature(state.polygons[layer._polyId]) && layer.bringToBack) layer.bringToBack();
+  });
+}
+
+function addPolygonWithLabel(label, color, kind = 'feature') {
   if (!pendingLayer) return;
 
   const id = 'poly_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   const areaSqFt = calcAreaSqFt(pendingLayer);
-
-  // Style the layer
-  const borderColor = color.replace(/[\d.]+\)$/, '1)');
-  pendingLayer.setStyle({
-    color: borderColor,
-    fillColor: color,
-    fillOpacity: 1,
-    weight: 2,
-  });
-
-  // Permanent tooltip
-  pendingLayer.bindTooltip(label, {
-    permanent: true,
-    direction: 'center',
-    className: 'poly-label-tooltip',
-  });
-
-  pendingLayer._polyId = id;
-  polygonFeatureGroup.addLayer(pendingLayer);
-
-  // Save to state
-  const feature = pendingLayer.toGeoJSON();
-  feature.properties = {
+  const props = {
     label,
-    color,
+    color: kind === 'area' ? AREA_COLOR : color,
+    kind,
     notes: '',
     areaSqFt,
     source: 'manual',
     createdAt: Date.now(),
   };
+
+  stylePolygonLayer(pendingLayer, props);
+  pendingLayer._polyId = id;
+  polygonFeatureGroup.addLayer(pendingLayer);
+
+  // Save to state
+  const feature = pendingLayer.toGeoJSON();
+  feature.properties = props;
   state.polygons[id] = feature;
   state.polygons[id].id = id;
+  if (kind === 'area') sendAreasToBack(polygonFeatureGroup);
 
   pendingLayer = null;
   saveState();
   renderPolygonList();
   rebuildMultiPolyGroups();
+  renderIssuePins();
   syncFirebase();
   showToast(`Added: ${label}`);
+  if (kind === 'area') setTimeout(() => offerLinkIssuesToArea(id), 300);
 }
 
 function calcAreaSqFt(layer) {
@@ -964,25 +992,14 @@ function restorePolygons() {
   Object.values(state.polygons).forEach(feature => {
     const layer = L.geoJSON(feature).getLayers()[0];
     if (!layer) return;
-
-    const { label, color } = feature.properties;
-    const borderColor = (color || '#16a34a').replace(/[\d.]+\)$/, '1)');
-    layer.setStyle({
-      color: borderColor,
-      fillColor: color || 'rgba(34,197,94,0.35)',
-      fillOpacity: 1,
-      weight: 2,
-    });
-    layer.bindTooltip(label || 'Unlabeled', {
-      permanent: true,
-      direction: 'center',
-      className: 'poly-label-tooltip',
-    });
+    stylePolygonLayer(layer, feature.properties || {});
     layer._polyId = feature.id;
     polygonFeatureGroup.addLayer(layer);
   });
+  sendAreasToBack(polygonFeatureGroup);
 
   renderPolygonList();
+  renderIssuePins();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -993,13 +1010,19 @@ function showPolyPopup(layer, polyId) {
   const feature = state.polygons[polyId];
   if (!feature) return;
   const { label, areaSqFt, notes } = feature.properties;
+  const linked = issuesForPolygon(polyId);
 
   const container = document.createElement('div');
   container.className = 'poly-popup';
   container.innerHTML = `
-    <h4>${escHtml(label)}</h4>
+    <h4>${escHtml(label)}${isAreaFeature(feature) ? ' <span class="poly-popup-kind">Yard area</span>' : ''}</h4>
     <p class="poly-popup-meta">${areaSqFt ? areaSqFt.toLocaleString() + ' sq ft' : ''}</p>
     <textarea placeholder="Notes…" id="poly-notes-ta">${escHtml(notes || '')}</textarea>
+    <div class="poly-popup-issues">
+      ${linked.length ? `<div class="poly-popup-issues-title">Issues here</div>` : ''}
+      ${linked.map(i => `<button class="poly-popup-issue" data-issue="${escHtml(i.id)}">${issueTypeInfo(i.type).icon} ${escHtml(i.title || 'Untitled')} <span class="status-dot" style="background:${issueStatusInfo(i.status).color}"></span></button>`).join('')}
+      <button class="poly-popup-issue add" id="poly-add-issue-btn">+ Add issue here</button>
+    </div>
     <div class="poly-popup-actions">
       <button id="poly-save-btn" style="background:var(--green);color:#fff">Save</button>
       <button id="poly-delete-btn" style="background:#fef2f2;color:#ef4444">Delete</button>
@@ -1007,6 +1030,15 @@ function showPolyPopup(layer, polyId) {
   `;
 
   layer.bindPopup(container).openPopup();
+
+  container.querySelectorAll('.poly-popup-issue[data-issue]').forEach(btn => {
+    btn.onclick = () => { layer.closePopup(); openIssue(btn.dataset.issue); };
+  });
+  container.querySelector('#poly-add-issue-btn').onclick = () => {
+    layer.closePopup();
+    const id = createIssue({ polygonId: polyId, area: label });
+    openIssue(id, { focusTitle: true });
+  };
 
   setTimeout(() => {
     const saveBtn = document.getElementById('poly-save-btn');
@@ -1023,10 +1055,12 @@ function showPolyPopup(layer, polyId) {
 
     if (deleteBtn) deleteBtn.onclick = () => {
       delete state.polygons[polyId];
+      unlinkIssuesFromPolygon(polyId);
       polygonFeatureGroup.removeLayer(layer);
       saveState();
       renderPolygonList();
       rebuildMultiPolyGroups();
+      renderIssuePins();
       syncFirebase();
       layer.closePopup();
       showToast('Polygon deleted');
@@ -1047,13 +1081,21 @@ function renderPolygonList() {
     return;
   }
 
-  list.innerHTML = polys.sort((a, b) => (a.properties.createdAt || 0) - (b.properties.createdAt || 0)).map(f => {
+  // Yard areas first, then detail shapes; each group oldest first
+  const sorted = polys.sort((a, b) =>
+    (isAreaFeature(b) - isAreaFeature(a)) || ((a.properties.createdAt || 0) - (b.properties.createdAt || 0)));
+  list.innerHTML = sorted.map(f => {
     const { label, color, areaSqFt } = f.properties;
-    const swatchColor = color || 'rgba(34,197,94,0.35)';
+    const area = isAreaFeature(f);
+    const swatch = area
+      ? `<span class="polygon-swatch area-swatch"></span>`
+      : `<span class="polygon-swatch" style="background:${color || 'rgba(34,197,94,0.35)'}"></span>`;
+    const nIssues = issuesForPolygon(f.id).length;
     return `
-      <div class="polygon-item" data-id="${f.id}">
-        <span class="polygon-swatch" style="background:${swatchColor}"></span>
+      <div class="polygon-item ${area ? 'is-area' : ''}" data-id="${f.id}">
+        ${swatch}
         <span class="polygon-item-label">${escHtml(label)}</span>
+        ${nIssues ? `<span class="polygon-item-issues">${nIssues} issue${nIssues > 1 ? 's' : ''}</span>` : ''}
         ${areaSqFt ? `<span class="polygon-item-area">${areaSqFt.toLocaleString()} ft²</span>` : ''}
       </div>
     `;
@@ -1541,6 +1583,8 @@ function syncFirebase() {
         Object.entries(state.photos).map(([k, v]) => [k, { ...v, uploadKey: undefined }])
       ),
       multiViewPhotos: state.multiViewPhotos,
+      issues: state.issues,
+      lawnProfile: state.lawnProfile,
     };
     firebaseDB.ref(`users/${currentUser.uid}/landscaping`)
       .set(payload)
@@ -1565,9 +1609,13 @@ function listenFirebase() {
       state.polygons = data.polygons || {};
       state.photos = { ...(data.photos || {}), ...localUploadPhotos };
       state.multiViewPhotos = data.multiViewPhotos || state.multiViewPhotos;
+      if (data.issues) state.issues = data.issues;
+      if (data.lawnProfile) state.lawnProfile = data.lawnProfile;
+      normalizeAllIssues();
 
       saveState();
       restorePolygons();
+      renderIssuesPanel();
       renderPhotoLibrary();
       updateMultiPaneSelects();
       if (mapMain) mapMain.setView([state.center.lat, state.center.lng], state.zoom);
@@ -1592,6 +1640,565 @@ function updateSyncStatus() {
     document.getElementById('firebase-signout-btn').style.display = 'none';
     document.getElementById('firebase-save-btn').textContent = 'Save & Connect';
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lawn issues (weeds, moss, dead spots…) + lawn profile
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// issue = { id, type, title, status, area, locationText, latlng:[lat,lng]|null,
+//           polygonId|null, diagnosis, causes, plan:[{step,timing,done}],
+//           products, entries:[{date,text,source}], createdAt, updatedAt }
+// entry.source: 'me' | 'google-ai' | 'claude' (reserved for in-app AI later)
+
+const ISSUE_TYPES = {
+  weed:        { label: 'Weeds',             icon: '\u{1F33F}', color: '#ca8a04' },
+  moss:        { label: 'Moss',              icon: '\u{1F331}', color: '#65a30d' },
+  'dead-spot': { label: 'Dead / bare spot',  icon: '\u{1F7EB}', color: '#92400e' },
+  insect:      { label: 'Insects / grubs',   icon: '\u{1F41B}', color: '#7c3aed' },
+  disease:     { label: 'Disease / fungus',  icon: '\u{1F344}', color: '#db2777' },
+  soil:        { label: 'Soil',              icon: '\u{1FAA8}', color: '#78716c' },
+  water:       { label: 'Water / drainage',  icon: '\u{1F4A7}', color: '#0284c7' },
+  other:       { label: 'Other',             icon: '\u{1F4DD}', color: '#475569' },
+};
+const ISSUE_STATUSES = {
+  open:       { label: 'Open',       color: '#ef4444' },
+  treating:   { label: 'Treating',   color: '#f59e0b' },
+  monitoring: { label: 'Monitoring', color: '#3b82f6' },
+  resolved:   { label: 'Resolved',   color: '#16a34a' },
+};
+const ENTRY_SOURCES = { me: 'Me', 'google-ai': 'Google AI', claude: 'Claude' };
+const LAWN_PROFILE_FIELDS = [
+  ['grassType', 'Grass type'], ['region', 'Region / climate'], ['soil', 'Soil'],
+  ['sun', 'Sun / shade'], ['mowing', 'Mowing'], ['watering', 'Watering'],
+  ['fertilizing', 'Fertilizing'], ['notes', 'Other notes'],
+];
+const DEFAULT_AREAS = ['Front yard', 'Back yard', 'Side yard'];
+
+function issueTypeInfo(t) { return ISSUE_TYPES[t] || ISSUE_TYPES.other; }
+function issueStatusInfo(s) { return ISSUE_STATUSES[s] || ISSUE_STATUSES.open; }
+function normName(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function newIssueId() { return 'issue_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7); }
+
+// Fill in defaults / repair shape (Firebase drops empty arrays and nulls)
+function normalizeIssue(raw, id) {
+  const i = Object.assign({}, raw || {});
+  i.id = String(i.id || id || newIssueId());
+  i.type = ISSUE_TYPES[i.type] ? i.type : 'other';
+  i.status = ISSUE_STATUSES[i.status] ? i.status : 'open';
+  ['title', 'area', 'locationText', 'diagnosis', 'causes', 'products'].forEach(k => {
+    i[k] = Array.isArray(i[k]) ? i[k].join('\n') : String(i[k] ?? '');
+  });
+  i.latlng = Array.isArray(i.latlng) && i.latlng.length === 2 && i.latlng.every(Number.isFinite) ? i.latlng : null;
+  i.polygonId = i.polygonId || null;
+  const plan = Array.isArray(i.plan) ? i.plan : Object.values(i.plan || {});
+  i.plan = plan.map(p => typeof p === 'string'
+    ? { step: p, timing: '', done: false }
+    : { step: String(p.step || ''), timing: String(p.timing || ''), done: !!p.done });
+  const entries = Array.isArray(i.entries) ? i.entries : Object.values(i.entries || {});
+  i.entries = entries.map(e => ({
+    date: String(e.date || ''),
+    text: String(e.text || ''),
+    source: ENTRY_SOURCES[e.source] ? e.source : 'me',
+  }));
+  i.createdAt = i.createdAt || Date.now();
+  i.updatedAt = i.updatedAt || i.createdAt;
+  return i;
+}
+
+function normalizeAllIssues() {
+  const out = {};
+  Object.entries(state.issues || {}).forEach(([k, v]) => { const n = normalizeIssue(v, k); out[n.id] = n; });
+  state.issues = out;
+  if (!state.lawnProfile || typeof state.lawnProfile !== 'object') state.lawnProfile = {};
+}
+
+function issuesForPolygon(polyId) {
+  return Object.values(state.issues || {}).filter(i => i.polygonId === polyId);
+}
+
+function unlinkIssuesFromPolygon(polyId) {
+  Object.values(state.issues || {}).forEach(i => { if (i.polygonId === polyId) i.polygonId = null; });
+}
+
+function issueAreaName(issue) {
+  const poly = issue.polygonId && state.polygons[issue.polygonId];
+  return (poly && poly.properties.label) || issue.area || '';
+}
+
+// All area names known: drawn yard areas, names used by issues, and defaults
+function knownAreaNames() {
+  const names = new Map();
+  const add = n => {
+    if (n && n.trim() && !names.has(normName(n))) names.set(normName(n), n.trim().replace(/^./, c => c.toUpperCase()));
+  };
+  Object.values(state.polygons).filter(isAreaFeature).forEach(f => add(f.properties.label));
+  Object.values(state.issues || {}).forEach(i => add(i.area));
+  DEFAULT_AREAS.forEach(add);
+  return [...names.values()];
+}
+
+function touchIssue(issue) {
+  issue.updatedAt = Date.now();
+  saveState();
+  syncFirebase();
+}
+
+function createIssue(fields = {}) {
+  const issue = normalizeIssue(Object.assign({ status: 'open', type: 'other' }, fields));
+  state.issues[issue.id] = issue;
+  touchIssue(issue);
+  renderIssuesPanel();
+  renderIssuePins();
+  renderPolygonList();
+  return issue.id;
+}
+
+// After a yard area is drawn: link unplaced issues that mention it by name
+function offerLinkIssuesToArea(polyId) {
+  const f = state.polygons[polyId];
+  if (!isAreaFeature(f)) return;
+  const name = normName(f.properties.label);
+  const matches = Object.values(state.issues).filter(i => !i.polygonId && normName(i.area) === name);
+  if (!matches.length) return;
+  const n = matches.length;
+  if (!confirm(`${n} issue${n > 1 ? 's' : ''} mention "${f.properties.label}". Link ${n > 1 ? 'them' : 'it'} to this area?`)) return;
+  matches.forEach(i => { i.polygonId = polyId; i.updatedAt = Date.now(); });
+  saveState();
+  syncFirebase();
+  renderIssuesPanel();
+  renderIssuePins();
+  renderPolygonList();
+  showToast(`Linked ${n} issue${n > 1 ? 's' : ''} to ${f.properties.label}`);
+}
+
+// ── Map pins ─────────────────────────────────────────────────────────────────
+
+let issuePinGroup = null;
+
+// Where an issue shows on the map: its own pin, else its linked shape's center
+function issuePosition(issue) {
+  if (issue.latlng) return { latlng: L.latLng(issue.latlng), own: true };
+  if (issue.polygonId) {
+    let pos = null;
+    polygonFeatureGroup.eachLayer(l => { if (l._polyId === issue.polygonId) pos = l.getBounds().getCenter(); });
+    if (pos) return { latlng: pos, own: false };
+  }
+  return null;
+}
+
+function renderIssuePins() {
+  if (!issuePinGroup || !polygonFeatureGroup) return;
+  issuePinGroup.clearLayers();
+  const stackCount = {}; // issues sharing a shape center get spread sideways
+  Object.values(state.issues || {}).forEach(issue => {
+    const pos = issuePosition(issue);
+    if (!pos) return;
+    // Pins placed at a shape's center sit just below its label (which would
+    // otherwise cover them) and spread sideways when several share a shape
+    let dx = 0, dy = 0;
+    if (!pos.own) {
+      const k = issue.polygonId;
+      const n = stackCount[k] = (stackCount[k] || 0) + 1;
+      dx = (n - 1) * 34 - 17;
+      dy = 30;
+    }
+    const t = issueTypeInfo(issue.type), s = issueStatusInfo(issue.status);
+    const icon = L.divIcon({
+      className: 'issue-pin-wrap',
+      html: `<div class="issue-pin ${issue.status === 'resolved' ? 'resolved' : ''}" style="background:${t.color};box-shadow:0 0 0 3px ${s.color},0 2px 6px rgba(0,0,0,.5)">${t.icon}</div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16 - dx, 16 - dy],
+    });
+    L.marker(pos.latlng, { icon, keyboard: false, riseOnHover: true })
+      .bindTooltip(`${escHtml(issue.title || 'Untitled')} — ${s.label}`, { direction: 'top', offset: [dx, dy - 14] })
+      .on('click', () => { if (currentDrawMode === 'none' && !issuePlaceMode) openIssue(issue.id); })
+      .addTo(issuePinGroup);
+  });
+}
+
+// ── "Place on map" ───────────────────────────────────────────────────────────
+
+let issuePlaceMode = null; // issue id waiting for a map tap
+
+function startPlaceIssue(issueId) {
+  closeIssueModal();
+  setDrawMode('none');
+  if (photoAdjust) exitPhotoAdjust(true);
+  switchView('single');
+  issuePlaceMode = issueId;
+  document.getElementById('map-main').classList.add('align-picking');
+  showToast('Tap the spot on the map for this issue');
+  setTimeout(() => mapMain.once('click', onPlaceIssueClick), 150); // skip the tap that switched views
+}
+
+function onPlaceIssueClick(e) {
+  const issue = state.issues[issuePlaceMode];
+  issuePlaceMode = null;
+  document.getElementById('map-main').classList.remove('align-picking');
+  if (!issue) return;
+  issue.latlng = [e.latlng.lat, e.latlng.lng];
+  touchIssue(issue);
+  renderIssuePins();
+  renderIssuesPanel();
+  showToast('Pin placed');
+  openIssue(issue.id);
+}
+
+// ── Issues tab ───────────────────────────────────────────────────────────────
+
+let issueFilter = 'active'; // 'active' | 'all' | 'resolved'
+
+function renderIssuesPanel() {
+  const listEl = document.getElementById('issue-list');
+  if (!listEl) return;
+  renderLawnProfile();
+
+  document.querySelectorAll('.issue-filter-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.filter === issueFilter));
+
+  const all = Object.values(state.issues || {});
+  const shown = all.filter(i =>
+    issueFilter === 'all' ? true : issueFilter === 'resolved' ? i.status === 'resolved' : i.status !== 'resolved');
+
+  if (!all.length) {
+    listEl.innerHTML = `<div class="issue-empty">No issues yet.<br>Import your notes (⚙️ Settings → Import notes) or tap <b>+ New issue</b>.</div>`;
+    return;
+  }
+  if (!shown.length) {
+    listEl.innerHTML = `<div class="issue-empty">Nothing in this filter.</div>`;
+    return;
+  }
+
+  // Group by area (drawn area's name, else the issue's area text)
+  const groups = new Map();
+  shown.forEach(i => {
+    const name = issueAreaName(i) || 'No area set';
+    const key = normName(name);
+    if (!groups.has(key)) groups.set(key, { name, issues: [] });
+    groups.get(key).issues.push(i);
+  });
+  const drawnAreas = new Set(Object.values(state.polygons).filter(isAreaFeature).map(f => normName(f.properties.label)));
+  const statusOrder = { open: 0, treating: 1, monitoring: 2, resolved: 3 };
+
+  listEl.innerHTML = [...groups.values()]
+    .sort((a, b) => a.name === 'No area set' ? 1 : b.name === 'No area set' ? -1 : a.name.localeCompare(b.name))
+    .map(g => `
+      <div class="issue-group">
+        <div class="issue-group-head">
+          <span>${escHtml(g.name)}</span>
+          ${g.name === 'No area set' ? '' : drawnAreas.has(normName(g.name))
+            ? '<span class="issue-group-tag drawn">\u{1F4D0} drawn</span>'
+            : '<span class="issue-group-tag">not drawn yet</span>'}
+        </div>
+        ${g.issues.sort((a, b) => (statusOrder[a.status] - statusOrder[b.status]) || (b.updatedAt - a.updatedAt)).map(i => {
+          const t = issueTypeInfo(i.type), s = issueStatusInfo(i.status);
+          const onMap = i.latlng ? '\u{1F4CD} pinned' : i.polygonId ? '\u{1F4D0} in area' : '';
+          const sub = [i.locationText, onMap].filter(Boolean).join(' · ');
+          return `
+            <button class="issue-card" data-issue="${escHtml(i.id)}">
+              <span class="issue-card-icon" style="background:${t.color}">${t.icon}</span>
+              <span class="issue-card-main">
+                <span class="issue-card-title">${escHtml(i.title || 'Untitled')}</span>
+                <span class="issue-card-sub">${escHtml(sub || t.label)}</span>
+              </span>
+              <span class="status-chip" style="background:${s.color}">${s.label}</span>
+            </button>`;
+        }).join('')}
+      </div>`).join('');
+
+  listEl.querySelectorAll('.issue-card').forEach(b => b.addEventListener('click', () => openIssue(b.dataset.issue)));
+}
+
+function renderLawnProfile() {
+  const el = document.getElementById('lawn-profile-fields');
+  if (!el || el.contains(document.activeElement)) return; // don't re-render while typing
+  const p = state.lawnProfile || {};
+  el.innerHTML = LAWN_PROFILE_FIELDS.map(([k, label]) => `
+    <label class="profile-row">
+      <span>${label}</span>
+      <textarea rows="1" data-profile="${k}" class="issue-input">${escHtml(p[k] || '')}</textarea>
+    </label>`).join('');
+  el.querySelectorAll('[data-profile]').forEach(ta => ta.addEventListener('input', () => {
+    state.lawnProfile[ta.dataset.profile] = ta.value;
+    saveState();
+    syncFirebase();
+  }));
+  const filled = LAWN_PROFILE_FIELDS.filter(([k]) => p[k]).length;
+  document.getElementById('lawn-profile-count').textContent = filled ? `${filled} filled in` : 'empty';
+}
+
+// ── Issue detail sheet ───────────────────────────────────────────────────────
+
+let openIssueId = null;
+
+function openIssue(id, opts = {}) {
+  const issue = state.issues[id];
+  if (!issue) return;
+  openIssueId = id;
+  renderIssueModal(issue);
+  document.getElementById('issue-modal').classList.add('open');
+  if (opts.focusTitle) setTimeout(() => document.getElementById('issue-title-input').focus(), 50);
+}
+
+function closeIssueModal() {
+  document.getElementById('issue-modal').classList.remove('open');
+  openIssueId = null;
+  renderIssuesPanel();
+  renderIssuePins();
+  renderPolygonList();
+}
+
+function renderIssueModal(issue) {
+  const body = document.getElementById('issue-modal-body');
+  const opt = (obj, cur) => Object.entries(obj).map(([k, v]) =>
+    `<option value="${k}" ${k === cur ? 'selected' : ''}>${escHtml(v.label || v)}${v.icon ? ' ' + v.icon : ''}</option>`).join('');
+  const polys = Object.values(state.polygons).sort((a, b) => isAreaFeature(b) - isAreaFeature(a));
+  const entries = issue.entries.map((e, idx) => ({ e, idx }))
+    .sort((a, b) => (b.e.date || '').localeCompare(a.e.date || ''));
+
+  body.innerHTML = `
+    <input class="issue-title-input" id="issue-title-input" data-field="title" placeholder="Issue title (e.g. Clover in front lawn)" value="${escHtml(issue.title)}" />
+    <div class="issue-row2">
+      <label><span>Type</span><select class="issue-input" data-field="type">${opt(ISSUE_TYPES, issue.type)}</select></label>
+      <label><span>Status</span><select class="issue-input" data-field="status">${opt(ISSUE_STATUSES, issue.status)}</select></label>
+    </div>
+    <div class="issue-row2">
+      <label><span>Area</span><input class="issue-input" data-field="area" list="area-names" value="${escHtml(issue.area)}" placeholder="Front yard" /></label>
+      <label><span>Spot</span><input class="issue-input" data-field="locationText" value="${escHtml(issue.locationText)}" placeholder="By the garage" /></label>
+    </div>
+    <datalist id="area-names">${knownAreaNames().map(n => `<option value="${escHtml(n)}">`).join('')}</datalist>
+
+    <div class="issue-map-row">
+      <button class="btn btn-secondary" id="issue-place-btn">\u{1F4CD} ${issue.latlng ? 'Move pin' : 'Place on map'}</button>
+      ${issue.latlng ? '<button class="btn btn-secondary" id="issue-unpin-btn">Remove pin</button>' : ''}
+      <select class="issue-input" data-field="polygonId" title="Link to a drawn shape">
+        <option value="">No linked shape</option>
+        ${polys.map(f => `<option value="${escHtml(f.id)}" ${f.id === issue.polygonId ? 'selected' : ''}>${isAreaFeature(f) ? '\u{1F4D0} ' : ''}${escHtml(f.properties.label || 'Unlabeled')}</option>`).join('')}
+      </select>
+    </div>
+
+    <label class="issue-block"><span>Diagnosis</span><textarea class="issue-input" data-field="diagnosis" rows="2" placeholder="What it is">${escHtml(issue.diagnosis)}</textarea></label>
+    <label class="issue-block"><span>Likely causes</span><textarea class="issue-input" data-field="causes" rows="2">${escHtml(issue.causes)}</textarea></label>
+
+    <div class="issue-block">
+      <span>Treatment plan</span>
+      <div class="plan-list">
+        ${issue.plan.map((p, idx) => `
+          <div class="plan-item">
+            <input type="checkbox" data-plan-done="${idx}" ${p.done ? 'checked' : ''} />
+            <div class="plan-text">
+              <input class="issue-input" data-plan-step="${idx}" value="${escHtml(p.step)}" placeholder="Step" />
+              <input class="issue-input plan-timing" data-plan-timing="${idx}" value="${escHtml(p.timing)}" placeholder="When (e.g. early fall)" />
+            </div>
+            <button class="icon-btn" data-plan-del="${idx}" title="Remove step">✕</button>
+          </div>`).join('')}
+      </div>
+      <button class="btn btn-secondary small" id="plan-add-btn">+ Add step</button>
+    </div>
+
+    <label class="issue-block"><span>Products</span><textarea class="issue-input" data-field="products" rows="2">${escHtml(issue.products)}</textarea></label>
+
+    <div class="issue-block">
+      <span>Journal</span>
+      <div class="entry-add">
+        <div class="issue-row2">
+          <select class="issue-input" id="entry-source"><option value="me">Me</option><option value="google-ai">Google AI</option></select>
+          <input class="issue-input" id="entry-date" type="date" value="${todayStr()}" />
+        </div>
+        <textarea class="issue-input" id="entry-text" rows="2" placeholder="What you did or saw, or paste an AI answer…"></textarea>
+        <button class="btn btn-primary small" id="entry-add-btn">Add to journal</button>
+      </div>
+      ${entries.map(({ e, idx }) => `
+        <div class="entry">
+          <div class="entry-head">
+            <span class="entry-date">${escHtml(e.date || 'No date')}</span>
+            <span class="entry-source src-${e.source}">${ENTRY_SOURCES[e.source]}</span>
+            <button class="icon-btn" data-entry-del="${idx}" title="Delete entry">✕</button>
+          </div>
+          <div class="entry-text">${escHtml(e.text)}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="issue-footer">
+      <button class="btn btn-secondary" id="issue-copy-btn">\u{1F4CB} Copy summary for AI</button>
+      <button class="btn btn-danger" id="issue-delete-btn">Delete</button>
+      <button class="btn btn-primary" id="issue-done-btn">Done</button>
+    </div>
+  `;
+
+  // Simple fields: save as you type
+  body.querySelectorAll('[data-field]').forEach(el => {
+    const ev = el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      issue[el.dataset.field] = el.value || (el.dataset.field === 'polygonId' ? null : '');
+      touchIssue(issue);
+      if (el.dataset.field === 'polygonId') renderIssuePins();
+    });
+  });
+
+  // Plan checklist
+  body.querySelectorAll('[data-plan-done]').forEach(el => el.addEventListener('change', () => {
+    issue.plan[+el.dataset.planDone].done = el.checked; touchIssue(issue);
+  }));
+  body.querySelectorAll('[data-plan-step]').forEach(el => el.addEventListener('input', () => {
+    issue.plan[+el.dataset.planStep].step = el.value; touchIssue(issue);
+  }));
+  body.querySelectorAll('[data-plan-timing]').forEach(el => el.addEventListener('input', () => {
+    issue.plan[+el.dataset.planTiming].timing = el.value; touchIssue(issue);
+  }));
+  body.querySelectorAll('[data-plan-del]').forEach(el => el.addEventListener('click', () => {
+    issue.plan.splice(+el.dataset.planDel, 1); touchIssue(issue); renderIssueModal(issue);
+  }));
+  body.querySelector('#plan-add-btn').addEventListener('click', () => {
+    issue.plan.push({ step: '', timing: '', done: false }); touchIssue(issue); renderIssueModal(issue);
+    const steps = body.querySelectorAll('[data-plan-step]');
+    if (steps.length) steps[steps.length - 1].focus();
+  });
+
+  // Journal
+  body.querySelector('#entry-add-btn').addEventListener('click', () => {
+    const text = body.querySelector('#entry-text').value.trim();
+    if (!text) { showToast('Write something first'); return; }
+    issue.entries.push({ date: body.querySelector('#entry-date').value || todayStr(), text, source: body.querySelector('#entry-source').value });
+    touchIssue(issue);
+    renderIssueModal(issue);
+    showToast('Added to journal');
+  });
+  body.querySelectorAll('[data-entry-del]').forEach(el => el.addEventListener('click', () => {
+    if (!confirm('Delete this journal entry?')) return;
+    issue.entries.splice(+el.dataset.entryDel, 1); touchIssue(issue); renderIssueModal(issue);
+  }));
+
+  // Map + footer
+  body.querySelector('#issue-place-btn').addEventListener('click', () => startPlaceIssue(issue.id));
+  const unpin = body.querySelector('#issue-unpin-btn');
+  if (unpin) unpin.addEventListener('click', () => { issue.latlng = null; touchIssue(issue); renderIssuePins(); renderIssueModal(issue); });
+  body.querySelector('#issue-copy-btn').addEventListener('click', () => copyForAI(buildIssueContext(issue.id)));
+  body.querySelector('#issue-delete-btn').addEventListener('click', () => {
+    if (!confirm(`Delete "${issue.title || 'this issue'}" and its journal?`)) return;
+    delete state.issues[issue.id];
+    saveState(); syncFirebase();
+    closeIssueModal();
+    showToast('Issue deleted');
+  });
+  body.querySelector('#issue-done-btn').addEventListener('click', closeIssueModal);
+}
+
+// ── "Copy summary for AI" ────────────────────────────────────────────────────
+// Plain-text context to paste into Google AI Mode (or any AI chat). Also the
+// prompt-builder for a future in-app AI feature.
+
+function buildProfileContext() {
+  const p = state.lawnProfile || {};
+  const lines = LAWN_PROFILE_FIELDS.filter(([k]) => p[k]).map(([k, label]) => `- ${label}: ${p[k].trim()}`);
+  if (state.address) lines.unshift(`- Location: ${state.address.split(',').slice(-2).join(',').trim()}`); // town/state only
+  return lines.length ? `About my lawn:\n${lines.join('\n')}` : '';
+}
+
+function describeIssue(issue, { full }) {
+  const t = issueTypeInfo(issue.type), s = issueStatusInfo(issue.status);
+  const where = [issueAreaName(issue), issue.locationText].filter(Boolean).join(' — ');
+  const out = [`${issue.title || 'Untitled'} (${t.label}; status: ${s.label})`];
+  if (where) out.push(`  Where: ${where}`);
+  if (issue.diagnosis) out.push(`  Diagnosis: ${issue.diagnosis.trim()}`);
+  if (issue.causes) out.push(`  Likely causes: ${issue.causes.trim()}`);
+  if (issue.plan.length) {
+    out.push('  Treatment plan:');
+    issue.plan.forEach(p => out.push(`    [${p.done ? 'x' : ' '}] ${p.step}${p.timing ? ` (${p.timing})` : ''}`));
+  }
+  if (issue.products) out.push(`  Products: ${issue.products.trim()}`);
+  const entries = [...issue.entries].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const shown = full ? entries : entries.slice(-3);
+  if (shown.length) {
+    out.push(full ? '  History:' : '  Recent history:');
+    shown.forEach(e => out.push(`    ${e.date || 'undated'} (${ENTRY_SOURCES[e.source]}): ${e.text.trim().replace(/\n+/g, ' ')}`));
+  }
+  return out.join('\n');
+}
+
+function buildIssueContext(issueId) {
+  const issue = state.issues[issueId];
+  if (!issue) return '';
+  return [
+    'Context from my lawn-care notes:',
+    buildProfileContext(),
+    `Issue I'm working on:\n${describeIssue(issue, { full: true })}`,
+    'My question: ',
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildLawnContext() {
+  const active = Object.values(state.issues).filter(i => i.status !== 'resolved');
+  return [
+    'Context from my lawn-care notes:',
+    buildProfileContext(),
+    active.length ? `Current issues:\n\n${active.map(i => describeIssue(i, { full: false })).join('\n\n')}` : 'No open issues right now.',
+    'My question: ',
+  ].filter(Boolean).join('\n\n');
+}
+
+async function copyForAI(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Copied — paste it into Google AI Mode and add your question');
+  } catch (e) {
+    // Clipboard blocked (some iOS contexts): show it for manual copy
+    const ta = document.getElementById('copy-text');
+    ta.value = text;
+    document.getElementById('copy-modal').classList.add('open');
+    setTimeout(() => { ta.focus(); ta.select(); }, 50);
+  }
+}
+
+// ── Import / export notes (.json) ────────────────────────────────────────────
+
+function importNotes(data) {
+  if (!data || typeof data !== 'object') throw new Error('Not a notes file');
+  const list = Array.isArray(data.issues) ? data.issues : Object.values(data.issues || {});
+  let added = 0, updated = 0;
+  list.forEach(raw => {
+    const incoming = normalizeIssue(raw);
+    const existing = state.issues[incoming.id];
+    if (existing) {
+      // Re-import keeps placement done in the app
+      if (!incoming.latlng) incoming.latlng = existing.latlng;
+      if (!incoming.polygonId) incoming.polygonId = existing.polygonId;
+      updated++;
+    } else {
+      added++;
+    }
+    state.issues[incoming.id] = incoming;
+  });
+  const prof = data.lawnProfile || {};
+  let profFilled = 0;
+  LAWN_PROFILE_FIELDS.forEach(([k]) => {
+    if (prof[k] && !state.lawnProfile[k]) { state.lawnProfile[k] = String(prof[k]); profFilled++; }
+  });
+  saveState();
+  syncFirebase();
+  return { added, updated, profFilled };
+}
+
+function exportNotes() {
+  const data = {
+    format: 'my-landscaping-notes',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    lawnProfile: state.lawnProfile,
+    issues: Object.values(state.issues),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `lawn-notes-${todayStr()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1677,6 +2284,23 @@ function closePhotoPreview() {
 function showLabelModal() {
   document.getElementById('label-modal').classList.add('open');
   document.getElementById('label-custom-input').value = '';
+  document.getElementById('area-custom-input').value = '';
+
+  // Yard-area buttons: defaults + area names used by imported issues,
+  // skipping areas that are already drawn
+  const drawn = new Set(Object.values(state.polygons).filter(isAreaFeature).map(f => normName(f.properties.label)));
+  const names = knownAreaNames().filter(n => !drawn.has(normName(n)));
+  const grid = document.getElementById('area-grid');
+  grid.innerHTML = names.map(n => {
+    const count = Object.values(state.issues).filter(i => !i.polygonId && normName(i.area) === normName(n)).length;
+    return `<button class="label-btn area-btn" data-area="${escHtml(n)}">
+      <span class="label-swatch area-swatch"></span> ${escHtml(n)}${count ? ` <span class="area-btn-count">${count}</span>` : ''}
+    </button>`;
+  }).join('');
+  grid.querySelectorAll('.area-btn').forEach(btn => btn.addEventListener('click', () => {
+    addPolygonWithLabel(btn.dataset.area, AREA_COLOR, 'area'); // before closeLabelModal (which nulls pendingLayer)
+    closeLabelModal();
+  }));
 }
 
 function closeLabelModal() {
@@ -1703,6 +2327,8 @@ function switchView(view) {
     setTimeout(() => mapMulti.forEach(m => m && m.invalidateSize()), 100);
   } else if (view === 'single') {
     setTimeout(() => mapMain && mapMain.invalidateSize(), 100);
+  } else if (view === 'issues') {
+    renderIssuesPanel();
   }
 }
 
@@ -1838,6 +2464,51 @@ function wireEvents() {
   document.getElementById('label-custom-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('label-custom-btn').click();
   });
+
+  document.getElementById('area-custom-btn').addEventListener('click', () => {
+    const name = document.getElementById('area-custom-input').value.trim();
+    if (!name) { showToast('Enter an area name'); return; }
+    addPolygonWithLabel(name, AREA_COLOR, 'area');
+    closeLabelModal();
+  });
+  document.getElementById('area-custom-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('area-custom-btn').click();
+  });
+
+  // Issues tab
+  document.getElementById('issue-new-btn').addEventListener('click', () => {
+    openIssue(createIssue({}), { focusTitle: true });
+  });
+  document.getElementById('issues-copy-all-btn').addEventListener('click', () => copyForAI(buildLawnContext()));
+  document.querySelectorAll('.issue-filter-btn').forEach(b => b.addEventListener('click', () => {
+    issueFilter = b.dataset.filter;
+    renderIssuesPanel();
+  }));
+  document.getElementById('issue-modal-close').addEventListener('click', closeIssueModal);
+  document.getElementById('issue-modal').addEventListener('click', e => {
+    if (e.target === e.currentTarget) closeIssueModal();
+  });
+  document.getElementById('copy-modal-close').addEventListener('click', () =>
+    document.getElementById('copy-modal').classList.remove('open'));
+
+  // Notes import / export (Settings → Data)
+  document.getElementById('import-notes-input').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const r = importNotes(JSON.parse(await file.text()));
+      closeSettings();
+      switchView('issues');
+      renderIssuePins();
+      renderPolygonList();
+      showToast(`Imported ${r.added} new, ${r.updated} updated` + (r.profFilled ? `, ${r.profFilled} profile fields` : ''));
+    } catch (err) {
+      console.error('Import failed:', err);
+      showToast('Could not import — is that a notes .json file?');
+    }
+  });
+  document.getElementById('export-notes-btn').addEventListener('click', exportNotes);
 
   // Settings
   document.getElementById('settings-btn').addEventListener('click', openSettings);
@@ -2003,8 +2674,10 @@ async function boot() {
   // Init main map
   initMainMap();
 
-  // Restore polygons from state
+  // Restore polygons and lawn issues from state
+  normalizeAllIssues();
   restorePolygons();
+  renderIssuesPanel();
 
   // Restore photo library
   renderPhotoLibrary();
